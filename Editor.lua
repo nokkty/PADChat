@@ -1,447 +1,527 @@
--- Menu editor: a standalone window, opened by the "VGSEdit" macro.
---
--- Left: the A / X / Y slots of the level being edited, drawn as controller
--- buttons. Tap a slot to edit it; tap the arrow on a category to go inside it.
--- Right: the selected slot, which is empty, a message, or a category. Every
--- change is saved at once and pushed to the secure menu (or queued until
--- combat ends).
---
--- No slash command: tested 2026-10-03, typing an addon slash command with the
--- gamepad UI on taints the chat box's gamepad focus stack, and the next
--- Open Chat locks the game ("insecure scripts exceeded execution limit").
--- The macro runs outside the chat box, so it's safe. No UISpecialFrames
--- either: Escape-to-close runs through Blizzard's secure window code.
-
+-- Tree-and-details editor, opened by the VGSEdit macro.
+-- Custom controls only: no Blizzard widget templates, slash commands, or
+-- UISpecialFrames (the latter two taint Forever's gamepad chat focus stack).
 local _, ns = ...
+local WIDTH, HEIGHT, SPLIT = 760, 650, 350
+local selected, expanded = "A", { X = true, XA = true }
+local context = "DEFAULT"
+local history, typingField = {}, nil
+local Refresh, nameBox, textBox, detail, move, confirm
 
-local WIDTH, HEIGHT = 720, 470
-local FORM_X = 360
+-- Return the saved slot, following the selected condition through its parents.
+-- Ownership prevents edits to inherited nodes from changing the default menu.
+local function Slot(path)
+	local node = ns.GetMenu()
+	local owned = context == "DEFAULT"
+	for i = 1, #path - 1 do
+		local condition
+		node, condition = ns.PickNode(node[path:sub(i, i)], context)
+		owned = condition == context or owned and condition == nil
+		if not node or node.text ~= nil then return nil end
+	end
+	return node, path:sub(-1), owned
+end
+local function At(path)
+	if path == "" then return ns.GetMenu(), context == "DEFAULT" end
+	local parent, key, owned = Slot(path)
+	if not parent then return nil, false end
+	local node, condition = ns.PickNode(parent[key], context)
+	return node, condition == context or owned and condition == nil
+end
+local function Put(path, node)
+	local parent, key, owned = Slot(path)
+	local raw = parent[key]
+	local _, condition = ns.PickNode(raw, context)
+	if context == "DEFAULT" then
+		local variants = raw and raw.variants
+		parent[key] = node or (variants and { empty = true })
+		if parent[key] then parent[key].variants = variants end
+	elseif owned and condition == nil then
+		parent[key] = node
+	else
+		if not raw then raw = { empty = true }; parent[key] = raw end
+		raw.variants = raw.variants or {}
+		raw.variants[context] = node or false
+	end
+end
+local function IsGroup(node) return type(node) == "table" and node.text == nil end
+local function Name(node)
+	return node and ((node.label ~= "" and node.label) or node.text or "Group") or "Empty slot"
+end
+local function Breadcrumb(path)
+	local parts = { "Top" }
+	for i = 1, #path do parts[#parts + 1] = Name(At(path:sub(1, i))) end
+	return table.concat(parts, " / ")
+end
+local function Sequence(path) return (path:gsub(".", "%0 > ")):gsub(" > $", "") end
+local function Remember(field)
+	if field and typingField == field then return end
+	history[#history + 1] = { menu = ns.CopyMenu(ns.GetMenu()), selected = selected, expanded = ns.CopyMenu(expanded), context = context }
+	if #history > 20 then table.remove(history, 1) end
+	typingField = field
+end
+local function Changed(textOnly)
+	ns.MenuChanged()
+	Refresh(textOnly)
+end
+local function Select(path)
+	if nameBox then nameBox:ClearFocus(); textBox:ClearFocus() end
+	if detail then detail:ScrollTo(0) end
+	typingField, selected = nil, path
+	for i = 1, #path - 1 do expanded[path:sub(1, i)] = true end
+	Refresh()
+end
+-- Empty groups still need room for a message below them.
+local function Depth(node)
+	if not node then return 0 end
+	local depth = node.empty and 0 or (IsGroup(node) and 2 or 1)
+	if IsGroup(node) then
+		for _, key in ipairs(ns.CHOICES) do depth = math.max(depth, node[key] and 1 + Depth(node[key]) or 0) end
+	end
+	for _, variant in pairs(node.variants or {}) do if variant then depth = math.max(depth, Depth(variant)) end end
+	return depth
+end
+local function CanMove(from, to)
+	if from == to or from:sub(1, #to) == to or to:sub(1, #from) == from then return false end
+	local source, owned = At(from)
+	if not source or not owned then return false end
+	local target = At(to)
+	if context == "DEFAULT" then
+		local parent, key = Slot(from); source = parent[key]
+		parent, key = Slot(to); target = parent and parent[key]
+	end
+	return IsGroup(At(to:sub(1, -2)))
+		and #to + Depth(source) - 1 <= ns.MAX_DEPTH
+		and #from + Depth(target) - 1 <= ns.MAX_DEPTH
+end
+
+local function Surface(parent, r, g, b)
+	local edge = parent:CreateTexture(nil, "BACKGROUND", nil, 0)
+	edge:SetAllPoints(); edge:SetColorTexture(0.22, 0.22, 0.23, 1)
+	local bg = parent:CreateTexture(nil, "BACKGROUND", nil, 1)
+	bg:SetPoint("TOPLEFT", 1, -1); bg:SetPoint("BOTTOMRIGHT", -1, 1)
+	bg:SetColorTexture(r, g, b, 1)
+	return bg
+end
+local function Text(parent, font, x, y, width, value)
+	local text = parent:CreateFontString(nil, "OVERLAY", font or "GameFontHighlight")
+	text:SetPoint("TOPLEFT", x, y); text:SetWidth(width); text:SetJustifyH("LEFT")
+	text:SetWordWrap(false); text:SetText(value or "")
+	return text
+end
+local function Button(parent, label, x, y, width, onClick)
+	local button = CreateFrame("Button", nil, parent)
+	button:SetSize(width, 28); button:SetPoint("TOPLEFT", x, y)
+	button.bg = Surface(button, 0.16, 0.16, 0.17)
+	button.label = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+	button.label:SetPoint("CENTER"); button.label:SetWidth(width - 12)
+	button.label:SetWordWrap(false); button.label:SetText(label)
+	local hover = button:CreateTexture(nil, "HIGHLIGHT")
+	hover:SetAllPoints(); hover:SetColorTexture(1, 1, 1, 0.07)
+	button:SetScript("OnClick", onClick)
+	button:SetScript("OnEnable", function(self) self.label:SetAlpha(1) end)
+	button:SetScript("OnDisable", function(self) self.label:SetAlpha(0.4) end)
+	return button
+end
+-- Template-free scroll areas; mouse wheel plus small, flat scroll buttons.
+local function Scroll(parent, x, y, width, height)
+	local scroll = CreateFrame("ScrollFrame", nil, parent)
+	scroll:SetPoint("TOPLEFT", x, y); scroll:SetSize(width, height)
+	local content = CreateFrame("Frame", nil, scroll)
+	content:SetPoint("TOPLEFT", scroll, "TOPLEFT", 0, 0)
+	content:SetSize(width - 16, height); scroll:SetScrollChild(content)
+	scroll.content, scroll.offset, scroll.maximum = content, 0, 0
+	local track = scroll:CreateTexture(nil, "BACKGROUND")
+	track:SetPoint("TOPRIGHT", -3, -30); track:SetSize(3, height - 60)
+	track:SetColorTexture(1, 1, 1, 0.06)
+	local thumb = scroll:CreateTexture(nil, "ARTWORK")
+	thumb:SetWidth(3); thumb:SetColorTexture(0.65, 0.61, 0.52, 0.7)
+	function scroll:ScrollTo(offset)
+		self.offset = math.max(0, math.min(self.maximum, offset))
+		self:SetVerticalScroll(self.offset)
+		local thumbHeight = math.max(20, (height - 60) * height / math.max(height, content:GetHeight()))
+		thumb:SetHeight(thumbHeight)
+		thumb:ClearAllPoints()
+		thumb:SetPoint("TOPRIGHT", -3, -30 - (self.maximum > 0 and self.offset / self.maximum * (height - 60 - thumbHeight) or 0))
+	end
+	local up = Button(scroll, "^", width - 14, 0, 14, function() scroll:ScrollTo(scroll.offset - 60) end)
+	local down = Button(scroll, "v", width - 14, -height + 28, 14, function() scroll:ScrollTo(scroll.offset + 60) end)
+	up.label:SetWidth(14); down.label:SetWidth(14)
+	function scroll:ContentHeight(value)
+		content:SetHeight(math.max(height, value)); self.maximum = math.max(0, value - height)
+		track:SetShown(self.maximum > 0); thumb:SetShown(self.maximum > 0)
+		up:SetShown(self.maximum > 0); down:SetShown(self.maximum > 0)
+		self:ScrollTo(self.offset)
+	end
+	scroll:EnableMouseWheel(true)
+	scroll:SetScript("OnMouseWheel", function(self, delta) self:ScrollTo(self.offset - delta * 34) end)
+	return scroll
+end
 
 local editor = CreateFrame("Frame", "VGSChatEditor", UIParent)
-editor:SetSize(WIDTH, HEIGHT)
-editor:SetPoint("CENTER")
-editor:SetFrameStrata("DIALOG")
-editor:SetToplevel(true)
-editor:SetMovable(true)
-editor:SetClampedToScreen(true)
-editor:EnableMouse(true)
-editor:RegisterForDrag("LeftButton")
-editor:SetScript("OnDragStart", editor.StartMoving)
-editor:SetScript("OnDragStop", editor.StopMovingOrSizing)
+editor:SetSize(WIDTH, HEIGHT); editor:SetPoint("CENTER"); editor:SetFrameStrata("DIALOG")
+editor:SetToplevel(true); editor:SetMovable(true); editor:SetClampedToScreen(true); editor:EnableMouse(true)
+Surface(editor, 0.09, 0.09, 0.1)
 editor:Hide()
-
-local bg = editor:CreateTexture(nil, "BACKGROUND")
-bg:SetAllPoints()
-bg:SetColorTexture(0.06, 0.06, 0.09, 0.95)
-
-local edge = editor:CreateTexture(nil, "BORDER")
-edge:SetPoint("TOPLEFT", 0, 0)
-edge:SetPoint("TOPRIGHT", 0, 0)
-edge:SetHeight(36)
-edge:SetColorTexture(0.12, 0.12, 0.18, 1)
-
--- The "VGSEdit" macro clicks this.
-local toggle = CreateFrame("Button", "VGSChatEditorToggle", UIParent)
--- /click sends a single press (up unless told otherwise); accept either.
-toggle:RegisterForClicks("AnyUp", "AnyDown")
-toggle:SetScript("OnClick", function()
-	editor:SetShown(not editor:IsShown())
+local header = CreateFrame("Frame", nil, editor)
+header:SetPoint("TOPLEFT", 1, -1); header:SetSize(WIDTH - 2, 60)
+header:EnableMouse(true); header:RegisterForDrag("LeftButton")
+header:SetScript("OnDragStart", function() editor:StartMoving() end)
+header:SetScript("OnDragStop", function() editor:StopMovingOrSizing() end)
+Text(header, "GameFontNormalLarge", 18, -12, 320, "VGS Chat")
+local subtitle = Text(header, "GameFontHighlightSmall", 18, -34, 320, "Menu setup")
+subtitle:SetTextColor(0.7, 0.68, 0.63)
+local undo = Button(header, "Undo", WIDTH - 160, -16, 66, function()
+	local previous = table.remove(history)
+	if not previous then return end
+	nameBox:ClearFocus(); textBox:ClearFocus(); typingField = nil
+	move:Hide(); confirm:Hide()
+	ns.DB.menu, selected, expanded = previous.menu, previous.selected, previous.expanded
+	context = previous.context
+	Changed()
 end)
-
-local path = ""      -- level being edited ("" = top, "X" = inside X, ...)
-local selected = "A" -- slot selected on that level
-
-------------------------------------------------------------------------
--- Model helpers
-------------------------------------------------------------------------
-local function LevelAt(p)
-	local node = ns.GetMenu()
-	for i = 1, #p do
-		node = node and node[p:sub(i, i)]
-	end
-	return node
-end
-
-local function SelectedNode()
-	local level = LevelAt(path)
-	return level and level[selected]
-end
-
-local function KindOf(node)
-	if not node then return "empty" end
-	return node.text and "message" or "category"
-end
-
-local function NameOf(node)
-	return (node.label and node.label ~= "") and node.label or node.text or "?"
-end
-
-local function ChatLabel(chat)
-	chat = chat or "SAY"
-	return chat:sub(1, 1) .. chat:sub(2):lower()
-end
-
-local function CountChildren(node)
-	local n = 0
-	for _, key in ipairs(ns.CHOICES) do
-		if node[key] then n = n + 1 end
-	end
-	return n
-end
-
-local function Breadcrumb()
-	local parts, node = { "Top" }, ns.GetMenu()
-	for i = 1, #path do
-		local key = path:sub(i, i)
-		node = node[key]
-		parts[#parts + 1] = "|c" .. ns.KEY_COLOR[key] .. key .. "|r " .. NameOf(node)
-	end
-	return table.concat(parts, "  >  ")
-end
-
-------------------------------------------------------------------------
--- Header
-------------------------------------------------------------------------
-local Refresh -- defined below
-
-local title = editor:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-title:SetPoint("TOPLEFT", 16, -10)
-title:SetText("VGS Chat: edit menu")
-
-local close = CreateFrame("Button", nil, editor, "UIPanelCloseButton")
-close:SetPoint("TOPRIGHT", -2, -2)
-
-local crumb = editor:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-crumb:SetPoint("TOPLEFT", 16, -52)
-crumb:SetWidth(FORM_X - 130)
-crumb:SetJustifyH("LEFT")
-crumb:SetWordWrap(false)
-
-local back = CreateFrame("Button", nil, editor, "UIPanelButtonTemplate")
-back:SetSize(90, 28)
-back:SetPoint("TOPLEFT", FORM_X - 106, -46)
-back:SetText("< Back")
-back:SetScript("OnClick", function()
-	selected = path:sub(-1)
-	path = path:sub(1, -2)
-	Refresh()
-end)
-
-------------------------------------------------------------------------
--- Slot cards (the A / X / Y spots)
-------------------------------------------------------------------------
-local CARD_W, CARD_H, CARD_GAP = FORM_X - 32, 64, 10
-
-local function HexToRGB(hex) -- "ffRRGGBB"
-	return tonumber(hex:sub(3, 4), 16) / 255, tonumber(hex:sub(5, 6), 16) / 255, tonumber(hex:sub(7, 8), 16) / 255
-end
-
-local function MakeBadge(parent, key)
-	local badge = parent:CreateTexture(nil, "ARTWORK")
-	badge:SetSize(40, 40)
-	badge:SetPoint("LEFT", 12, 0)
-	badge:SetColorTexture(HexToRGB(ns.KEY_COLOR[key]))
-	local mask = parent:CreateMaskTexture()
-	mask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-	mask:SetAllPoints(badge)
-	badge:AddMaskTexture(mask)
-	local letter = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
-	letter:SetPoint("CENTER", badge, "CENTER", 0, 0)
-	letter:SetTextColor(0.05, 0.05, 0.05)
-	letter:SetText(key)
-	return badge
-end
-
-local cards = {}
-local function MakeCard(key, index)
-	local card = CreateFrame("Button", nil, editor)
-	card:SetSize(CARD_W, CARD_H)
-	card:SetPoint("TOPLEFT", 16, -86 - (index - 1) * (CARD_H + CARD_GAP))
-
-	card.bg = card:CreateTexture(nil, "BACKGROUND")
-	card.bg:SetAllPoints()
-	card.bg:SetColorTexture(1, 1, 1, 0.06)
-
-	card.sel = card:CreateTexture(nil, "BORDER")
-	card.sel:SetAllPoints()
-	card.sel:SetColorTexture(1, 0.82, 0, 0.18)
-
-	card.hl = card:CreateTexture(nil, "HIGHLIGHT")
-	card.hl:SetAllPoints()
-	card.hl:SetColorTexture(1, 1, 1, 0.06)
-
-	MakeBadge(card, key)
-	if key == "B" then card:Disable() end
-
-	card.name = card:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
-	card.name:SetPoint("TOPLEFT", 64, -12)
-	card.name:SetPoint("RIGHT", -52, 0)
-	card.name:SetJustifyH("LEFT")
-	card.name:SetWordWrap(false)
-
-	card.sub = card:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-	card.sub:SetPoint("TOPLEFT", card.name, "BOTTOMLEFT", 0, -4)
-	card.sub:SetPoint("RIGHT", -52, 0)
-	card.sub:SetJustifyH("LEFT")
-	card.sub:SetWordWrap(false)
-
-	if key ~= "B" then
-		card:SetScript("OnClick", function()
-			selected = key
-			Refresh()
-		end)
-
-		-- Go inside a category.
-		card.open = CreateFrame("Button", nil, card, "UIPanelButtonTemplate")
-		card.open:SetSize(40, CARD_H - 16)
-		card.open:SetPoint("RIGHT", -8, 0)
-		card.open:SetText(">")
-		card.open:SetScript("OnClick", function()
-			path = path .. key
-			selected = "A"
-			Refresh()
-		end)
-	end
-	cards[key] = card
-	return card
-end
-
-for i, key in ipairs(ns.CHOICES) do MakeCard(key, i) end
-local cancelCard = MakeCard("B", #ns.CHOICES + 1)
-cancelCard.sel:Hide()
-cancelCard.name:SetText("|cff808080Cancel|r")
-cancelCard.sub:SetText("Always closes the menu")
-
-------------------------------------------------------------------------
--- Form for the selected slot
-------------------------------------------------------------------------
-local divider = editor:CreateTexture(nil, "BORDER")
-divider:SetPoint("TOPLEFT", FORM_X - 8, -46)
-divider:SetPoint("BOTTOMLEFT", FORM_X - 8, 50)
-divider:SetWidth(1)
-divider:SetColorTexture(1, 1, 1, 0.12)
-
-local formTitle = editor:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-formTitle:SetPoint("TOPLEFT", FORM_X + 8, -52)
-
-local formPress = editor:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-formPress:SetPoint("TOPLEFT", formTitle, "BOTTOMLEFT", 0, -4)
-
-local kindLabel = editor:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-kindLabel:SetPoint("TOPLEFT", FORM_X + 8, -100)
-kindLabel:SetText("This button does")
-
-local kindButtons = {}
-local function SetKind(kind)
-	local level = LevelAt(path)
-	local old = level[selected]
-	if KindOf(old) == kind then return end
-	if kind == "empty" then
-		level[selected] = nil
-	elseif kind == "message" then
-		local label = old and old.label or "New message"
-		level[selected] = { label = label, text = label, chat = "SAY" }
-	else
-		level[selected] = { label = old and old.label or "New group" }
-	end
-	ns.MenuChanged()
-	Refresh()
-end
-
-for i, entry in ipairs({ { "message", "Send a message" }, { "category", "Open a group" }, { "empty", "Nothing" } }) do
-	local b = CreateFrame("Button", nil, editor, "UIPanelButtonTemplate")
-	b:SetSize(108, 30)
-	b:SetPoint("TOPLEFT", FORM_X + 8 + (i - 1) * 114, -116)
-	b:SetText(entry[2])
-	b:SetScript("OnClick", function() SetKind(entry[1]) end)
-	kindButtons[entry[1]] = b
-end
-
-local function MakeField(labelText, y, maxLetters, onChange)
-	local label = editor:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-	label:SetPoint("TOPLEFT", FORM_X + 8, y)
-	label:SetText(labelText)
-	local box = CreateFrame("EditBox", nil, editor, "InputBoxTemplate")
-	box:SetSize(WIDTH - FORM_X - 36, 28)
-	box:SetPoint("TOPLEFT", FORM_X + 14, y - 16)
-	box:SetAutoFocus(false)
-	box:SetMaxLetters(maxLetters)
-	box:SetScript("OnTextChanged", function(self, userInput)
-		if userInput then onChange(self:GetText()) end
+Button(header, "Close", WIDTH - 84, -16, 64, function() editor:Hide() end)
+local divider = editor:CreateTexture(nil, "ARTWORK")
+divider:SetPoint("TOPLEFT", SPLIT, -60); divider:SetPoint("BOTTOMLEFT", SPLIT, 52)
+divider:SetWidth(1); divider:SetColorTexture(0.22, 0.22, 0.23, 1)
+local footerLine = editor:CreateTexture(nil, "ARTWORK")
+footerLine:SetPoint("BOTTOMLEFT", 1, 52); footerLine:SetPoint("BOTTOMRIGHT", -1, 52)
+footerLine:SetHeight(1); footerLine:SetColorTexture(0.22, 0.22, 0.23, 1)
+local status = Text(editor, "GameFontHighlightSmall", 18, -HEIGHT + 40, WIDTH - 190)
+status:SetTextColor(0.89, 0.77, 0.48)
+local cancelHint = Text(editor, "GameFontHighlightSmall", 18, -HEIGHT + 23, WIDTH - 190, "|c" .. ns.KEY_COLOR.B .. "B|r always cancels  ·  Four presses maximum")
+cancelHint:SetTextColor(0.7, 0.68, 0.63)
+local mappingCaption = Text(editor, "GameFontHighlightSmall", 18, -74, 324)
+mappingCaption:SetTextColor(0.7, 0.68, 0.63)
+local mappings = {}
+for i, condition in ipairs(ns.CONTEXTS) do
+	mappings[condition] = Button(editor, ns.CONTEXT_LABELS[condition], 16 + (i - 1) * 110, -94, 104, function()
+		nameBox:ClearFocus(); textBox:ClearFocus(); move:Hide(); confirm:Hide()
+		typingField, context = nil, condition; detail:ScrollTo(0); Refresh()
 	end)
-	box:SetScript("OnEnterPressed", box.ClearFocus)
-	box:SetScript("OnEscapePressed", box.ClearFocus)
-	return label, box
 end
-
-local nameLabel, nameBox = MakeField("Name in the menu", -162, 40, function(text)
-	local node = SelectedNode()
-	if node then
-		node.label = text
-		Refresh(true)
-	end
+local customize = Button(editor, "Customize option", 16, -130, 168, function()
+	local node, owned = At(selected)
+	if context == "DEFAULT" or owned then return end
+	Remember(); Put(selected, ns.ResolveNode(node, context)); Changed()
 end)
-
-local textLabel, textBox = MakeField("Message that gets sent", -218, 255, function(text)
-	local node = SelectedNode()
-	if node and node.text then
-		node.text = text
-		Refresh(true)
-	end
+local inherit = Button(editor, "Use inherited", 194, -130, 146, function()
+	local parent, key = Slot(selected)
+	local raw = parent and parent[key]
+	if context == "DEFAULT" or not raw or not raw.variants or raw.variants[context] == nil then return end
+	Remember(); raw.variants[context] = nil
+	if not next(raw.variants) then raw.variants = nil; if raw.empty then parent[key] = nil end end
+	Changed()
 end)
+local mappingHint = Text(editor, "GameFontHighlightSmall", 18, -168, 324)
+mappingHint:SetTextColor(0.7, 0.68, 0.63)
+local tree = Scroll(editor, 16, -190, SPLIT - 26, HEIGHT - 252)
+detail = Scroll(editor, SPLIT + 18, -76, WIDTH - SPLIT - 32, HEIGHT - 140)
+local form = detail.content
+local formTitle = Text(form, "GameFontHighlightLarge", 0, 0, form:GetWidth())
+formTitle:SetWordWrap(true)
+local formPath = Text(form, "GameFontHighlightSmall", 0, -28, form:GetWidth())
+formPath:SetTextColor(0.7, 0.68, 0.63)
+local formKind = Text(form, "GameFontHighlightSmall", 0, -46, form:GetWidth())
+formKind:SetTextColor(0.7, 0.68, 0.63)
 
-local chatButton = CreateFrame("Button", nil, editor, "UIPanelButtonTemplate")
-chatButton:SetSize(160, 30)
-chatButton:SetPoint("TOPLEFT", FORM_X + 8, -276)
-chatButton:SetScript("OnClick", function()
-	local node = SelectedNode()
-	if not (node and node.text) then return end
-	local types, current = ns.CHAT_TYPES, node.chat or "SAY"
-	local nextIndex = 1
-	for i, t in ipairs(types) do
-		if t == current then nextIndex = i % #types + 1 end
-	end
-	node.chat = types[nextIndex]
-	Refresh()
-end)
-
--- A real click, so even /say outdoors goes through.
-local sendNow = CreateFrame("Button", nil, editor, "UIPanelButtonTemplate")
-sendNow:SetSize(160, 30)
-sendNow:SetPoint("LEFT", chatButton, "RIGHT", 10, 0)
-sendNow:SetText("Send now")
-sendNow:SetScript("OnClick", function() ns.SendNode(SelectedNode()) end)
-
-local openGroup = CreateFrame("Button", nil, editor, "UIPanelButtonTemplate")
-openGroup:SetSize(220, 34)
-openGroup:SetPoint("TOPLEFT", FORM_X + 8, -222)
-openGroup:SetText("Edit what's inside  >")
-openGroup:SetScript("OnClick", function()
-	path = path .. selected
-	selected = "A"
-	Refresh()
-end)
-
-local note = editor:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-note:SetPoint("TOPLEFT", FORM_X + 8, -320)
-note:SetWidth(WIDTH - FORM_X - 30)
-note:SetJustifyH("LEFT")
-
-------------------------------------------------------------------------
--- Footer
-------------------------------------------------------------------------
-local status = editor:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-status:SetPoint("BOTTOMLEFT", 16, 18)
-status:SetPoint("RIGHT", -200, 0)
-status:SetJustifyH("LEFT")
-
-local resetArmed = false
-local reset = CreateFrame("Button", nil, editor, "UIPanelButtonTemplate")
-reset:SetSize(170, 28)
-reset:SetPoint("BOTTOMRIGHT", -16, 12)
-reset:SetScript("OnClick", function(self)
-	if not resetArmed then
-		resetArmed = true
-		self:SetText("Tap again to reset")
-		C_Timer.After(4, function()
-			resetArmed = false
-			if editor:IsShown() then Refresh(true) end
-		end)
-		return
-	end
-	resetArmed = false
-	ns.ResetToDefaults()
-	path, selected = "", "A"
-	Refresh()
-end)
-
-------------------------------------------------------------------------
--- Refresh
-------------------------------------------------------------------------
-local function DescribeCard(card, node)
-	local kind = KindOf(node)
-	card.open:SetShown(kind == "category")
-	if kind == "empty" then
-		card.name:SetText("|cff808080(empty)|r")
-		card.sub:SetText("Does nothing")
-	elseif kind == "category" then
-		card.name:SetText(NameOf(node))
-		local n = CountChildren(node)
-		card.sub:SetText("Group  -  " .. n .. (n == 1 and " item" or " items"))
-	else
-		card.name:SetText(NameOf(node))
-		card.sub:SetText(ChatLabel(node.chat) .. ":  " .. (node.text ~= "" and node.text or "(no text)"))
-	end
-end
-
--- textOnly: called while typing, so leave the edit boxes alone.
-Refresh = function(textOnly)
-	-- The level being edited may have vanished (reset, or a parent turned into a message).
-	while path ~= "" and KindOf(LevelAt(path)) ~= "category" do
-		path = path:sub(1, -2)
-	end
-	local level = LevelAt(path)
-
-	crumb:SetText(Breadcrumb())
-	back:SetEnabled(path ~= "")
-	for _, key in ipairs(ns.CHOICES) do
-		local card = cards[key]
-		DescribeCard(card, level[key])
-		card.sel:SetShown(key == selected)
-	end
-
-	local node = level[selected]
-	local kind = KindOf(node)
-	local depth = #path + 1
-	local presses = {}
-	for i = 1, #path do presses[#presses + 1] = path:sub(i, i) end
-	presses[#presses + 1] = selected
-	formTitle:SetText("|c" .. ns.KEY_COLOR[selected] .. selected .. "|r button")
-	formPress:SetText("In game: macro, then " .. table.concat(presses, " > "))
-
-	if not textOnly then
-		for k, b in pairs(kindButtons) do
-			b:SetEnabled(k ~= kind and not (k == "category" and depth >= ns.MAX_DEPTH))
-			if k == kind then b:LockHighlight() else b:UnlockHighlight() end
+local function Field(label, y, maxLetters, property)
+	local caption = Text(form, "GameFontHighlightSmall", 0, y, form:GetWidth(), label)
+	caption:SetTextColor(0.7, 0.68, 0.63)
+	local box = CreateFrame("EditBox", nil, form)
+	box:SetSize(form:GetWidth(), 30); box:SetPoint("TOPLEFT", 0, y - 18)
+	box:SetAutoFocus(false); box:SetMaxLetters(maxLetters); box:SetFontObject("GameFontHighlight")
+	box:SetTextInsets(9, 9, 0, 0); Surface(box, 0.055, 0.055, 0.065)
+	box:SetScript("OnTextChanged", function(self, userInput)
+		local node, owned = At(selected)
+		if userInput and owned and node and node[property] ~= self:GetText() then
+			Remember(self); node[property] = self:GetText(); Changed(true)
 		end
-		nameBox:SetText(node and node.label or "")
-		textBox:SetText(node and node.text or "")
-	end
+	end)
+	box:SetScript("OnEditFocusLost", function() typingField = nil end)
+	box:SetScript("OnEnterPressed", box.ClearFocus); box:SetScript("OnEscapePressed", box.ClearFocus)
+	return caption, box
+end
+local nameLabel, textLabel
+nameLabel, nameBox = Field("Menu label", -76, 40, "label")
+textLabel, textBox = Field("Message", -136, 255, "text")
+local channelLabel = Text(form, "GameFontHighlightSmall", 0, -196, form:GetWidth(), "Send to")
+channelLabel:SetTextColor(0.7, 0.68, 0.63)
+local channels = {}
+for i, chat in ipairs(ns.CHAT_TYPES) do
+	local button = Button(form, ns.CHAT_LABELS[chat], ({ 0, 76, 176 })[i], -214, ({ 66, 90, 176 })[i], function()
+		local node, owned = At(selected)
+		if not owned or not node or node.text == nil or (node.chat or "SAY") == chat then return end
+		Remember(); node.chat = chat; Changed()
+	end)
+	channels[chat] = button
+end
+local emptyHint = Text(form, "GameFontHighlight", 0, -80, form:GetWidth(), "Choose what this button should do.")
+emptyHint:SetWordWrap(true)
+local addMessage = Button(form, "+ Message", 0, -118, 124, function()
+	local node, owned = At(selected)
+	if node or not owned then return end
+	Remember(); Put(selected, { label = "New message", text = "Hello!", chat = "SAY" }); Changed()
+end)
+local addGroup = Button(form, "+ Group", 134, -118, 104, function()
+	local node, owned = At(selected)
+	if node or not owned or #selected >= ns.MAX_DEPTH then return end
+	Remember(); Put(selected, { label = "New group" }); expanded[selected] = true; Changed()
+end)
 
-	local isMessage, isCategory = kind == "message", kind == "category"
-	nameLabel:SetShown(node ~= nil); nameBox:SetShown(node ~= nil)
-	textLabel:SetShown(isMessage); textBox:SetShown(isMessage)
-	chatButton:SetShown(isMessage); sendNow:SetShown(isMessage)
-	openGroup:SetShown(isCategory)
-	chatButton:SetText("Channel: " .. ChatLabel(node and node.chat))
+-- One custom confirmation panel for deleting a group or resetting the menu.
+confirm = CreateFrame("Frame", nil, editor)
+confirm:SetSize(420, 160); confirm:SetPoint("CENTER"); confirm:SetFrameLevel(editor:GetFrameLevel() + 30)
+confirm:EnableMouse(true); Surface(confirm, 0.12, 0.12, 0.13); confirm:Hide()
+local confirmTitle = Text(confirm, "GameFontHighlightLarge", 18, -18, 384)
+local confirmText = Text(confirm, "GameFontHighlight", 18, -50, 384)
+confirmText:SetWordWrap(true)
+local confirmAction
+Button(confirm, "Cancel", 18, -114, 82, function() confirm:Hide() end)
+local confirmApply = Button(confirm, "Remove", 270, -114, 132, function()
+	local action = confirmAction; confirm:Hide(); if action then action() end
+end)
+confirmApply.label:SetTextColor(1, 0.4, 0.4)
+local function Ask(title, message, label, action)
+	nameBox:ClearFocus(); textBox:ClearFocus()
+	if move then move:Hide() end
+	confirmTitle:SetText(title); confirmText:SetText(message); confirmApply.label:SetText(label)
+	confirmAction = action; confirm:Show()
+end
+Button(editor, "Reset defaults", WIDTH - 148, -HEIGHT + 39, 130, function()
+	Ask("Reset your menu?", "Replace all options with the defaults. You can undo this change.", "Reset", function()
+		Remember(); selected, expanded, context = "A", { X = true, XA = true }, "DEFAULT"; ns.ResetToDefaults(); Refresh()
+	end)
+end)
 
-	if isCategory then
-		note:SetText("Switching this to a message or nothing deletes everything inside it.")
-	elseif kind == "empty" then
-		note:SetText("Pressing this button here does nothing.")
-	elseif depth >= ns.MAX_DEPTH then
-		note:SetText("Deepest level: buttons here can only send messages.")
+-- Destination picker includes empty slots and swaps, without overwriting data.
+move = CreateFrame("Frame", nil, editor)
+move:SetSize(WIDTH - SPLIT - 20, HEIGHT - 124); move:SetPoint("TOPLEFT", SPLIT + 10, -66)
+move:SetFrameLevel(editor:GetFrameLevel() + 20); move:EnableMouse(true); Surface(move, 0.12, 0.12, 0.13); move:Hide()
+local moveTitle = Text(move, "GameFontHighlightLarge", 14, -14, move:GetWidth() - 28)
+local moveHint = Text(move, "GameFontHighlightSmall", 14, -40, move:GetWidth() - 28, "Choose a destination. Occupied slots swap.")
+moveHint:SetTextColor(0.7, 0.68, 0.63)
+local destinations = Scroll(move, 10, -68, move:GetWidth() - 20, move:GetHeight() - 124)
+local destinationRows, destination, moveSource = {}, nil, nil
+local DrawDestinations
+local applyMove = Button(move, "Move option", move:GetWidth() - 146, -move:GetHeight() + 42, 132, function()
+	if not (moveSource and destination and At(moveSource) and CanMove(moveSource, destination)) then return end
+	Remember()
+	if context == "DEFAULT" then
+		local sourceParent, sourceKey = Slot(moveSource)
+		local targetParent, targetKey = Slot(destination)
+		sourceParent[sourceKey], targetParent[targetKey] = targetParent[targetKey], sourceParent[sourceKey]
 	else
-		note:SetText("")
+		local source, target = ns.ResolveNode(At(moveSource), context), ns.ResolveNode(At(destination), context)
+		Put(moveSource, target); Put(destination, source)
 	end
+	local movedExpanded = {}
+	for path, value in pairs(expanded) do
+		local targetPath = path
+		if path:sub(1, #moveSource) == moveSource then targetPath = destination .. path:sub(#moveSource + 1)
+		elseif path:sub(1, #destination) == destination then targetPath = moveSource .. path:sub(#destination + 1) end
+		movedExpanded[targetPath] = value
+	end
+	expanded = movedExpanded; move:Hide(); selected = destination
+	for i = 1, #selected - 1 do expanded[selected:sub(1, i)] = true end
+	Changed()
+end)
+Button(move, "Cancel", 14, -move:GetHeight() + 42, 82, function() move:Hide() end)
+DrawDestinations = function()
+	local paths = {}
+	local function Walk(node, parent)
+		for _, key in ipairs(ns.CHOICES) do
+			local path = parent .. key
+			if CanMove(moveSource, path) then paths[#paths + 1] = path end
+			local child = At(path)
+			if IsGroup(child) and #path < ns.MAX_DEPTH then Walk(child, path) end
+		end
+	end
+	Walk(ns.GetMenu(), "")
+	local valid = false
+	for _, path in ipairs(paths) do if path == destination then valid = true end end
+	if not valid then destination = nil end
+	for i, path in ipairs(paths) do
+		local row = destinationRows[i]
+		if not row then
+			row = Button(destinations.content, "", 0, -(i - 1) * 46, destinations.content:GetWidth(), function(self)
+				destination = self.path; DrawDestinations()
+			end)
+			row:SetHeight(42); row.label:Hide()
+			row.name = Text(row, "GameFontHighlightSmall", 10, -6, row:GetWidth() - 20)
+			row.description = Text(row, "GameFontHighlightSmall", 10, -23, row:GetWidth() - 20)
+			destinationRows[i] = row
+		end
+		row.path = path; row.name:SetText(Breadcrumb(path:sub(1, -2)))
+		row.description:SetText("|c" .. ns.KEY_COLOR[path:sub(-1)] .. Sequence(path) .. "|r  ·  " .. (At(path) and "Swap with " .. Name(At(path)) or "Empty slot"))
+		row.bg:SetColorTexture(path == destination and 0.22 or 0.16, path == destination and 0.2 or 0.16, path == destination and 0.15 or 0.17, 1)
+		row:Show()
+	end
+	for i = #paths + 1, #destinationRows do destinationRows[i]:Hide() end
+	destinations:ContentHeight(#paths * 46)
+	applyMove:SetEnabled(destination ~= nil)
+	applyMove.label:SetText(destination and At(destination) and "Swap options" or "Move option")
+	moveHint:SetText(#paths > 0 and "Choose a destination. Occupied slots swap." or "No destination fits the four-press limit.")
+end
+local moveButton = Button(form, "Move / swap...", 0, -264, 122, function()
+	nameBox:ClearFocus(); textBox:ClearFocus()
+	confirm:Hide()
+	moveSource, destination = selected, nil; destinations:ScrollTo(0)
+	moveTitle:SetText("Move " .. Name(At(selected))); DrawDestinations(); move:Show()
+end)
+local remove = Button(form, "Remove", 132, -264, 80, function()
+	local path = selected
+	local node, owned = At(path)
+	if not node or not owned then return end
+	local function Delete()
+		Remember(); Put(path, nil); Changed()
+	end
+	if IsGroup(node) then
+		Ask("Remove " .. Name(node) .. "?", "This removes the group and every option inside it. Undo restores the whole group.", "Remove group", Delete)
+	else Delete() end
+end)
+remove.label:SetTextColor(1, 0.4, 0.4)
+local sendNow = Button(form, "Send now", 222, -264, 90, function() ns.SendNode(At(selected)) end)
+local groupHint = Text(form, "GameFontHighlightSmall", 0, -184, form:GetWidth(), "Expand the group in the tree to edit its options.")
+groupHint:SetTextColor(0.7, 0.68, 0.63); groupHint:SetWordWrap(true)
+local previewCaption = Text(form, "GameFontHighlightSmall", 0, -316, form:GetWidth(), "HUD preview")
+previewCaption:SetTextColor(0.7, 0.68, 0.63)
+local previewArea = CreateFrame("Frame", nil, form)
+previewArea:SetPoint("TOPLEFT", 0, -338)
+local preview = ns.CreateMenuView(previewArea)
+preview:SetPoint("TOPLEFT", previewArea, "TOPLEFT", 0, 0)
 
-	local notes = {}
-	if ns.IsPublishPending() then
-		notes[#notes + 1] = "|cffffd100Changes apply when combat ends.|r"
+local rows = {}
+local function DrawTree()
+	local visible = {}
+	local function Walk(node, parent)
+		for _, key in ipairs(ns.CHOICES) do
+			local path = parent .. key
+			visible[#visible + 1] = path
+			local child = At(path)
+			if IsGroup(child) and expanded[path] and #path < ns.MAX_DEPTH then Walk(child, path) end
+		end
 	end
-	if not ns.savedLoaded then
-		notes[#notes + 1] = "First run (or saved settings didn't load): using the default menu."
+	Walk(ns.GetMenu(), "")
+	for i, path in ipairs(visible) do
+		local row = rows[i]
+		if not row then
+			row = CreateFrame("Button", nil, tree.content)
+			row:SetHeight(32)
+			row.selection = row:CreateTexture(nil, "BACKGROUND")
+			row.selection:SetAllPoints(); row.selection:SetColorTexture(0.22, 0.2, 0.15, 1)
+			local hover = row:CreateTexture(nil, "HIGHLIGHT")
+			hover:SetAllPoints(); hover:SetColorTexture(1, 1, 1, 0.05)
+			row.expand = Button(row, ">", 0, -2, 22, function(self)
+				local p = self:GetParent().path
+				move:Hide(); confirm:Hide()
+				expanded[p] = not expanded[p]
+				if not expanded[p] and selected:sub(1, #p) == p then Select(p) else Refresh() end
+			end)
+			row.badges = {}
+			for _, key in ipairs(ns.CHOICES) do
+				local holder = CreateFrame("Frame", nil, row)
+				holder:SetSize(22, 22); holder:SetPoint("LEFT", 26, 0)
+				local badge = ns.MakeBadge(holder, key, 22); badge:SetPoint("LEFT", 0, 0)
+				row.badges[key] = holder
+			end
+			row.label = Text(row, "GameFontHighlight", 58, -9, 160)
+			row.kind = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+			row.kind:SetPoint("RIGHT", -6, 0); row.kind:SetTextColor(0.7, 0.68, 0.63)
+			row:SetScript("OnClick", function(self) move:Hide(); confirm:Hide(); Select(self.path) end)
+			rows[i] = row
+		end
+		local node, indent = At(path), (#path - 1) * 14
+		row.path = path; row:SetWidth(tree.content:GetWidth() - indent)
+		row:SetPoint("TOPLEFT", indent, -(i - 1) * 34)
+		row.selection:SetShown(path == selected)
+		row.expand:SetShown(IsGroup(node)); row.expand.label:SetText(expanded[path] and "v" or ">")
+		for key, badge in pairs(row.badges) do badge:SetShown(key == path:sub(-1)); badge:SetAlpha(node and 1 or 0.4) end
+		row.label:SetWidth(row:GetWidth() - 104)
+		row.label:SetText(node and Name(node) or "+ Add option")
+		row.label:SetTextColor(path == selected and 0.89 or (node and 0.94 or 0.6), path == selected and 0.77 or (node and 0.92 or 0.6), path == selected and 0.48 or (node and 0.89 or 0.6))
+		local _, owned = At(path)
+		row.kind:SetText(context ~= "DEFAULT" and owned and "Custom" or (IsGroup(node) and "Group" or ""))
+		row:Show()
 	end
-	status:SetText(table.concat(notes, "  "))
-	if not resetArmed then reset:SetText("Reset to defaults") end
+	for i = #visible + 1, #rows do rows[i]:Hide() end
+	tree:ContentHeight(#visible * 34 + 4)
 end
 
-editor:SetScript("OnShow", function() Refresh() end)
+Refresh = function(textOnly)
+	while #selected > 1 and not IsGroup(At(selected:sub(1, -2))) do selected = selected:sub(1, -2) end
+	local node, owned = At(selected)
+	local message, group = node and node.text ~= nil, IsGroup(node)
+	mappingCaption:SetText("Edit mapping  ·  Active: " .. ns.CONTEXT_LABELS[ns.GetContext()])
+	for condition, button in pairs(mappings) do
+		local active = condition == context
+		button.bg:SetColorTexture(active and 0.22 or 0.16, active and 0.2 or 0.16, active and 0.15 or 0.17, 1)
+		button.label:SetTextColor(active and 0.89 or 0.94, active and 0.77 or 0.92, active and 0.48 or 0.89)
+	end
+	customize:SetShown(context ~= "DEFAULT"); customize:SetEnabled(not owned)
+	inherit:SetShown(context ~= "DEFAULT")
+	local slotParent, slotKey = Slot(selected)
+	local raw = slotParent[slotKey]
+	inherit:SetEnabled(context ~= "DEFAULT" and raw and raw.variants and raw.variants[context] ~= nil or false)
+	mappingHint:SetText(context == "DEFAULT" and "Default menu · used when solo" or (owned and "Custom mapping · editing this branch" or "Inherited · customize to make changes"))
+	DrawTree(); undo:SetEnabled(#history > 0)
+	formTitle:SetText("|c" .. ns.KEY_COLOR[selected:sub(-1)] .. selected:sub(-1) .. "|r  " .. (node and Name(node) or "Add an option"))
+	-- Keep long labels in their field; avoid a heading growing into the controls.
+	formTitle:SetWordWrap(false)
+	formPath:SetText(Breadcrumb(selected:sub(1, -2)))
+	formKind:SetText(Sequence(selected) .. "  ·  " .. (message and "Message" or (group and "Group" or "Empty slot")) .. (context ~= "DEFAULT" and (owned and " · Custom" or " · Inherited") or ""))
+	if not textOnly then nameBox:SetText(node and node.label or ""); textBox:SetText(message and node.text or "") end
+	nameLabel:SetShown(node ~= nil); nameBox:SetShown(node ~= nil)
+	textLabel:SetShown(message); textBox:SetShown(message); channelLabel:SetShown(message)
+	for _, box in ipairs({ nameBox, textBox }) do box:EnableMouse(owned); box:EnableKeyboard(owned); box:SetAlpha(owned and 1 or 0.5) end
+	channelLabel:SetText(context == "DEFAULT" and "Send to · available now" or "Send to · " .. ns.CONTEXT_LABELS[context] .. " mapping")
+	for chat, button in pairs(channels) do
+		button:SetShown(message)
+		button:SetEnabled(owned and (ns.GetChannel(chat) ~= nil or context ~= "DEFAULT" and ns.ChannelAvailable(chat, context)))
+		local active = message and (node.chat or "SAY") == chat
+		button.bg:SetColorTexture(active and 0.22 or 0.16, active and 0.2 or 0.16, active and 0.15 or 0.17, 1)
+		button.label:SetTextColor(active and 0.89 or 0.94, active and 0.77 or 0.92, active and 0.48 or 0.89)
+	end
+	emptyHint:SetShown(node == nil); addMessage:SetShown(node == nil); addGroup:SetShown(node == nil)
+	addMessage:SetEnabled(owned); addGroup:SetEnabled(owned and #selected < ns.MAX_DEPTH); groupHint:SetShown(group)
+	moveButton:SetShown(node ~= nil); remove:SetShown(node ~= nil); sendNow:SetShown(message)
+	moveButton:SetEnabled(owned); remove:SetEnabled(owned); sendNow:SetEnabled(message and ns.GetChannel(node.chat) ~= nil or false)
+	local actionY = message and -250 or -136
+	moveButton:SetPoint("TOPLEFT", 0, actionY); remove:SetPoint("TOPLEFT", 132, actionY)
+	sendNow:SetPoint("TOPLEFT", 222, actionY)
+	local previewY = message and 302 or (group and 232 or 190)
+	previewCaption:SetPoint("TOPLEFT", 0, -previewY + 22)
+	previewArea:SetPoint("TOPLEFT", 0, -previewY)
+	local parent = group and selected or selected:sub(1, -2)
+	previewCaption:SetText("HUD preview · " .. ns.CONTEXT_LABELS[context])
+	preview:Display(ns.ResolveNode(At(parent), context), parent == "" and "Quick Chat" or Name(At(parent)), parent, context)
+	-- Fit wrapped HUD labels too, keeping the right side free of scrolling.
+	local previewScale = math.min(1, (detail:GetHeight() - previewY - 10) / preview:GetHeight())
+	preview:SetScale(previewScale)
+	previewArea:SetSize(preview:GetWidth() * previewScale, preview:GetHeight() * previewScale)
+	detail:ContentHeight(previewY + previewArea:GetHeight() + 10)
+	if ns.IsPublishPending() then
+		status:SetText(InCombatLockdown() and "Changes apply after combat and when quick chat closes." or "Close quick chat to apply changes.")
+	else
+		status:SetText(ns.savedLoaded == false and "Default menu loaded (first run or saved settings unavailable)." or "Changes saved")
+	end
+end
 
--- Pick up the "changes apply after combat" note going away.
+local toggle = CreateFrame("Button", "VGSChatEditorToggle", UIParent)
+toggle:RegisterForClicks("AnyUp", "AnyDown")
+toggle:SetScript("OnClick", function() editor:SetShown(not editor:IsShown()) end)
+editor:SetScript("OnShow", function()
+	editor:SetScale(math.min(1, (UIParent:GetWidth() - 32) / WIDTH, (UIParent:GetHeight() - 32) / HEIGHT))
+	Refresh()
+end)
+editor:SetScript("OnHide", function()
+	nameBox:ClearFocus(); textBox:ClearFocus(); move:Hide(); confirm:Hide()
+end)
+-- Also clears a deferred status once the secure menu receives the new snapshot.
 local watcher = CreateFrame("Frame")
 watcher:RegisterEvent("PLAYER_REGEN_ENABLED")
-watcher:SetScript("OnEvent", function()
-	if editor:IsShown() then C_Timer.After(0, function() Refresh(true) end) end
-end)
-
+watcher:RegisterEvent("GROUP_ROSTER_UPDATE")
+watcher:RegisterEvent("PLAYER_ENTERING_WORLD")
+watcher:SetScript("OnEvent", function() if editor:IsShown() then C_Timer.After(0, function() Refresh(true) end) end end)
+local open = _G.VGSChatOpen
+open:HookScript("OnClick", function() if editor:IsShown() then Refresh(true) end end)

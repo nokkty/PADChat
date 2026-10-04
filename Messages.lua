@@ -7,7 +7,9 @@
 -- category that opens the next level, up to four presses deep, so "X then Y
 -- then A" works the same as Tribes 2's "V G Y".
 --
--- `chat` is optional: "SAY" (default), "YELL" or "EMOTE".
+-- `chat` is optional: "SAY" (default), "GROUP" or "RAID" (raid/battleground).
+-- `variants.GROUP` and `variants.RAID` can replace an option and its subtree;
+-- raid variants take priority, and false disables an option in that context.
 -- On a PlayStation pad A = Cross, X = Square, Y = Triangle, B = Circle.
 
 local _, ns = ...
@@ -22,7 +24,7 @@ ns.DefaultMenu = {
 		A = { label = "Greet",
 			A = { label = "Hello",   text = "Well met!" },
 			X = { label = "Goodbye", text = "Farewell!" },
-			Y = { label = "Wave",    text = "waves.", chat = "EMOTE" },
+			Y = { label = "Wave",    text = "Hello there!" },
 		},
 		X = { label = "Group",
 			A = { label = "Invite please!",  text = "Invite please!" },

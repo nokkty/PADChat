@@ -26,12 +26,14 @@ local MACRO_BODY = "/click VGSChatOpen LeftButton 1"
 local KEYS = { A = "PAD1", B = "PAD2", X = "PAD3", Y = "PAD4" }
 local CHOICES = { "A", "X", "Y" }
 local KEY_COLOR = { A = "ff60d060", X = "ff4aa3ff", Y = "ffffd100", B = "ffff5050" }
-local ALLOWED_CHAT = { SAY = true, YELL = true, EMOTE = true }
 
 local function Print(text) print("|cff33ff99VGS Chat|r: " .. text) end
 
 ns.CHOICES, ns.KEY_COLOR, ns.Print = CHOICES, KEY_COLOR, Print
-ns.CHAT_TYPES = { "SAY", "YELL", "EMOTE" }
+ns.CHAT_TYPES = { "SAY", "GROUP", "RAID" }
+ns.CHAT_LABELS = { SAY = "Say", GROUP = "Group", RAID = "Raid/Battleground" }
+ns.CONTEXTS = { "DEFAULT", "GROUP", "RAID" }
+ns.CONTEXT_LABELS = { DEFAULT = "Default", GROUP = "Group", RAID = "Raid/BG" }
 ns.MAX_DEPTH = 4 -- presses per message, counting the last one
 
 ------------------------------------------------------------------------
@@ -44,29 +46,84 @@ local function DeepCopy(t)
 	for k, v in pairs(t) do out[k] = DeepCopy(v) end
 	return out
 end
+ns.CopyMenu = DeepCopy
 
 function ns.GetMenu()
 	return ns.DB and ns.DB.menu or ns.DefaultMenu
 end
 
+function ns.GetContext()
+	if IsInRaid() then return "RAID" end
+	return IsInGroup() and "GROUP" or "DEFAULT"
+end
+
+-- A variant replaces one option (including its children). Missing variants
+-- inherit; false explicitly clears the slot. Empty anchors hold variants for
+-- a slot that has no default option.
+function ns.PickNode(node, context)
+	if not node then return nil end
+	local variants, condition = node.variants, nil
+	if variants then
+		if context == "RAID" and variants.RAID ~= nil then condition = "RAID"
+		elseif context ~= "DEFAULT" and variants.GROUP ~= nil then condition = "GROUP" end
+	end
+	if condition then node = variants[condition] end
+	return node and not node.empty and node or nil, condition
+end
+
+function ns.ResolveNode(node, context)
+	node = ns.PickNode(node, context)
+	if not node then return nil end
+	local result = { label = node.label, text = node.text, chat = node.chat }
+	if node.text == nil then
+		for _, key in ipairs(CHOICES) do result[key] = ns.ResolveNode(node[key], context) end
+	end
+	return result
+end
+
+function ns.ChannelAvailable(chat, context)
+	return chat == "SAY" or chat == nil or chat == "GROUP" and context ~= "DEFAULT" or chat == "RAID" and context == "RAID"
+end
+
+-- Group follows the player's current party/raid. Instance chat takes priority
+-- over a separate home group, matching the game's chat channel rules.
+function ns.GetChannel(chat)
+	if not chat or chat == "SAY" then return "SAY" end
+	local instance = IsInGroup(LE_PARTY_CATEGORY_INSTANCE)
+	if chat == "GROUP" then
+		if instance then return "INSTANCE_CHAT" end
+		if IsInRaid() then return "RAID" end
+		if IsInGroup() then return "PARTY" end
+	elseif chat == "RAID" then
+		if instance and IsInRaid(LE_PARTY_CATEGORY_INSTANCE) then return "INSTANCE_CHAT" end
+		if IsInRaid(LE_PARTY_CATEGORY_HOME) then return "RAID" end
+	end
+end
+
+function ns.MigrateMenu(node)
+	if type(node) ~= "table" then return end
+	if node.text ~= nil then
+		local chat = node.chat and node.chat:upper() or "SAY"
+		if chat == "PARTY" then chat = "GROUP"
+		elseif chat == "INSTANCE_CHAT" or chat == "BATTLEGROUND" then chat = "RAID" end
+		node.chat = ns.CHAT_LABELS[chat] and chat or "SAY"
+	end
+	for _, key in ipairs(CHOICES) do ns.MigrateMenu(node[key]) end
+	for _, variant in pairs(node.variants or {}) do ns.MigrateMenu(variant) end
+end
+
+local activeMenus = {}
+for _, context in ipairs(ns.CONTEXTS) do activeMenus[context] = ns.ResolveNode(ns.DefaultMenu, context) end
+
 ------------------------------------------------------------------------
 -- Menu lookup
 ------------------------------------------------------------------------
-local function NodeAt(path)
-	local node = ns.GetMenu()
+local function NodeAt(path, context)
+	local node = activeMenus[context or "DEFAULT"]
 	for i = 1, #path do
 		node = node and node[path:sub(i, i)]
 	end
 	return node
-end
-
-local function PathLabels(path)
-	local labels, node = {}, ns.GetMenu()
-	for i = 1, #path do
-		node = node[path:sub(i, i)]
-		labels[#labels + 1] = node.label or "?"
-	end
-	return table.concat(labels, " > ")
 end
 
 ------------------------------------------------------------------------
@@ -87,6 +144,7 @@ open:SetAttribute("_onclick", ([[
 			self:SetAttribute("path", "")
 		else
 			self:SetAttribute("open", 1)
+			self:SetAttribute("menucontext", self:GetAttribute("state-context") or "DEFAULT")
 			self:SetAttribute("path", "")
 			self:SetBindingClick(true, "%s", "VGSChatOpen", "A")
 			self:SetBindingClick(true, "%s", "VGSChatOpen", "X")
@@ -105,9 +163,11 @@ open:SetAttribute("_onclick", ([[
 	end
 
 	local path = (self:GetAttribute("path") or "") .. button
-	local kind = self:GetAttribute("node-" .. path)
+	local context = self:GetAttribute("menucontext") or "DEFAULT"
+	local kind = self:GetAttribute("node-" .. context .. "-" .. path)
 	if kind == "leaf" then
 		self:SetAttribute("sentpath", path)
+		self:SetAttribute("sentcontext", context)
 		self:SetAttribute("sentseq", (self:GetAttribute("sentseq") or 0) + 1)
 		self:ClearBindings()
 		self:SetAttribute("open", nil)
@@ -117,30 +177,43 @@ open:SetAttribute("_onclick", ([[
 	end
 ]]):format(KEYS.A, KEYS.X, KEYS.Y, KEYS.B))
 
+-- Native state drivers can switch between already-published menu shapes in
+-- combat. The context stays fixed during an open menu so button paths don't
+-- change meaning halfway through a selection.
+RegisterStateDriver(open, "context", "[group:raid] RAID; [group] GROUP; DEFAULT")
+
 -- The snippet only knows the menu's shape, published as node-<path> attributes.
--- Protected attributes can only be set out of combat, so edits made in combat
--- wait for PLAYER_REGEN_ENABLED.
+-- Protected attributes can only be set out of combat. Keep the active data and
+-- shape together until combat ends and the current quick chat menu closes.
 local publishedPaths = {}
 local menuDirty = true
 
 local function PublishMenu()
-	if not menuDirty or InCombatLockdown() then return end
+	if not menuDirty or InCombatLockdown() or open:GetAttribute("open") then return end
+	local snapshots = {}
 	for path in pairs(publishedPaths) do
 		open:SetAttribute("node-" .. path, nil)
 	end
 	wipe(publishedPaths)
-	local function Walk(node, path)
+	local function Walk(node, path, context)
 		for _, key in ipairs(CHOICES) do
 			local child = node[key]
 			if child then
 				local childPath = path .. key
-				open:SetAttribute("node-" .. childPath, child.text and "leaf" or "branch")
-				publishedPaths[childPath] = true
-				if not child.text then Walk(child, childPath) end
+				local attributePath = context .. "-" .. childPath
+				if not child.text or ns.ChannelAvailable(child.chat, context) then
+					open:SetAttribute("node-" .. attributePath, child.text and "leaf" or "branch")
+					publishedPaths[attributePath] = true
+				end
+				if not child.text then Walk(child, childPath, context) end
 			end
 		end
 	end
-	Walk(ns.GetMenu(), "")
+	for _, context in ipairs(ns.CONTEXTS) do
+		snapshots[context] = ns.ResolveNode(ns.GetMenu(), context)
+		Walk(snapshots[context], "", context)
+	end
+	activeMenus = snapshots
 	menuDirty = false
 end
 
@@ -164,8 +237,11 @@ local lastSeq = 0
 
 local function SendNode(node)
 	if not (node and node.text and node.text ~= "") then return end
-	local chatType = node.chat and node.chat:upper() or "SAY"
-	if not ALLOWED_CHAT[chatType] then chatType = "SAY" end
+	local chatType = ns.GetChannel(node.chat)
+	if not chatType then
+		Print("Join a " .. (node.chat == "RAID" and "raid or battleground" or "group") .. " to send this message.")
+		return
+	end
 	local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
 	local ok, err = pcall(send, node.text, chatType)
 	if not ok then Print("|cffff5050Couldn't send:|r " .. tostring(err)) end
@@ -175,45 +251,125 @@ ns.SendNode = SendNode -- the editor's "Send now" (a click, so /say is allowed)
 ------------------------------------------------------------------------
 -- On-screen menu
 ------------------------------------------------------------------------
-local menu = CreateFrame("Frame", "VGSChatMenu", UIParent)
-menu:SetSize(260, 150)
-menu:SetPoint("LEFT", UIParent, "LEFT", 40, 80)
-menu:SetFrameStrata("HIGH")
-menu:Hide()
-
-local bg = menu:CreateTexture(nil, "BACKGROUND")
-bg:SetAllPoints()
-bg:SetColorTexture(0, 0, 0, 0.7)
-
-local title = menu:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-title:SetPoint("TOPLEFT", 12, -10)
-title:SetPoint("RIGHT", -12, 0)
-title:SetJustifyH("LEFT")
-
-local rows = {}
-for i, key in ipairs({ "A", "X", "Y", "B" }) do
-	local fs = menu:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
-	fs:SetPoint("TOPLEFT", 14, -10 - i * 28)
-	fs:SetPoint("RIGHT", -12, 0)
-	fs:SetJustifyH("LEFT")
-	rows[key] = fs
+-- Shared with the editor so controller buttons look the same in both places.
+function ns.MakeBadge(parent, key, size)
+	size = size or 40
+	local hex = KEY_COLOR[key]
+	local badge = parent:CreateTexture(nil, "ARTWORK")
+	badge:SetSize(size, size)
+	badge:SetPoint("LEFT", 12, 0)
+	badge:SetColorTexture(tonumber(hex:sub(3, 4), 16) / 255, tonumber(hex:sub(5, 6), 16) / 255, tonumber(hex:sub(7, 8), 16) / 255)
+	local mask = parent:CreateMaskTexture()
+	mask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+	mask:SetAllPoints(badge)
+	badge:AddMaskTexture(mask)
+	local letter = parent:CreateFontString(nil, "OVERLAY", size >= 40 and "GameFontNormalHuge" or "GameFontHighlight")
+	letter:SetPoint("CENTER", badge, "CENTER", 0, 0)
+	letter:SetTextColor(0.05, 0.05, 0.05)
+	letter:SetText(key)
+	return badge
 end
 
-local function UpdateMenu()
-	if not open:GetAttribute("open") then
-		menu:Hide()
-		return
-	end
-	local path = open:GetAttribute("path") or ""
-	local node = NodeAt(path) or ns.GetMenu()
-	title:SetText(path == "" and "Quick Chat" or ("Quick Chat > " .. PathLabels(path)))
+-- The editor uses the same view for its preview.
+function ns.CreateMenuView(parent, name)
+	local menu = CreateFrame("Frame", name, parent)
+	menu:SetSize(260, 160)
+	menu:Hide()
+
+	local edge = menu:CreateTexture(nil, "BACKGROUND", nil, 0)
+	edge:SetAllPoints()
+	edge:SetColorTexture(0.29, 0.27, 0.22, 0.9)
+
+	local bg = menu:CreateTexture(nil, "BACKGROUND", nil, 1)
+	bg:SetPoint("TOPLEFT", 1, -1)
+	bg:SetPoint("BOTTOMRIGHT", -1, 1)
+	bg:SetColorTexture(0.09, 0.09, 0.1, 0.96)
+
+	local title = menu:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	title:SetPoint("TOPLEFT", 14, -12)
+	title:SetWidth(232)
+	title:SetJustifyH("LEFT")
+	title:SetWordWrap(true)
+
+	local sequence = menu:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	sequence:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
+	sequence:SetTextColor(0.7, 0.68, 0.63)
+
+	local headerLine = menu:CreateTexture(nil, "ARTWORK")
+	headerLine:SetSize(232, 1)
+	headerLine:SetColorTexture(0.29, 0.27, 0.22, 0.7)
+
+	local rows = {}
 	for _, key in ipairs(CHOICES) do
-		local child = node[key]
-		local label = child and ((child.label or child.text) .. (child.text and "" or "  >")) or "|cff808080-|r"
-		rows[key]:SetText("|c" .. KEY_COLOR[key] .. key .. "|r   " .. label)
+		local row = CreateFrame("Frame", nil, menu)
+		row:SetSize(232, 30)
+		row.badge = ns.MakeBadge(row, key, 22)
+		row.badge:SetPoint("LEFT", 0, 0)
+		row.label = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+		row.label:SetPoint("TOPLEFT", 34, -6)
+		row.label:SetWidth(178)
+		row.label:SetJustifyH("LEFT")
+		row.label:SetWordWrap(true)
+		row.arrow = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+		row.arrow:SetPoint("RIGHT", 0, 0)
+		row.arrow:SetText(">")
+		row.arrow:SetTextColor(0.7, 0.68, 0.63)
+		rows[key] = row
 	end
-	rows.B:SetText("|c" .. KEY_COLOR.B .. "B|r   Cancel")
-	menu:Show()
+
+	local footer = CreateFrame("Frame", nil, menu)
+	footer:SetSize(232, 28)
+	local footerLine = footer:CreateTexture(nil, "ARTWORK")
+	footerLine:SetPoint("TOPLEFT")
+	footerLine:SetPoint("TOPRIGHT")
+	footerLine:SetHeight(1)
+	footerLine:SetColorTexture(0.29, 0.27, 0.22, 0.7)
+	local cancelBadge = ns.MakeBadge(footer, "B", 18)
+	cancelBadge:SetPoint("LEFT", 0, -4)
+	cancelBadge:SetAlpha(0.65)
+	local cancel = footer:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	cancel:SetPoint("LEFT", cancelBadge, "RIGHT", 8, 0)
+	cancel:SetText("Cancel")
+	cancel:SetTextColor(0.7, 0.68, 0.63)
+
+	function menu:Display(node, heading, path, context)
+		path = path or ""
+		title:SetText(heading)
+		sequence:SetShown(path ~= "")
+		sequence:SetText((path:gsub(".", "%0  ")):gsub("  $", ""))
+		local y = 12 + title:GetStringHeight() + (path ~= "" and 18 or 0) + 10
+		headerLine:SetPoint("TOPLEFT", 14, -y)
+		y = y + 5
+		for _, key in ipairs(CHOICES) do
+			local child = node[key]
+			local row = rows[key]
+			row.label:SetText(child and ((child.label ~= "" and child.label) or child.text or "?") or "—")
+			local available = child and (not child.text or ns.ChannelAvailable(child.chat, context or ns.GetContext()))
+			row.label:SetTextColor(available and 0.94 or 0.5, available and 0.92 or 0.5, available and 0.89 or 0.5)
+			row.badge:SetAlpha(available and 1 or 0.35)
+			row.arrow:SetShown(child ~= nil and not child.text)
+			local height = math.max(30, row.label:GetStringHeight() + 12)
+			row:SetHeight(height)
+			row:SetPoint("TOPLEFT", 14, -y)
+			y = y + height
+		end
+		footer:SetPoint("TOPLEFT", 14, -y - 4)
+		menu:SetHeight(y + 4 + 28 + 12)
+		menu:Show()
+	end
+	return menu
+end
+
+local menu = ns.CreateMenuView(UIParent, "VGSChatMenu")
+menu:SetPoint("LEFT", UIParent, "LEFT", 40, 80)
+menu:SetFrameStrata("HIGH")
+
+local function UpdateMenu()
+	if not open:GetAttribute("open") then menu:Hide(); return end
+	local path = open:GetAttribute("path") or ""
+	local context = open:GetAttribute("menucontext") or "DEFAULT"
+	local node = NodeAt(path, context) or activeMenus[context]
+	menu:Display(node, path == "" and "Quick Chat" or (node.label ~= "" and node.label or nil) or "Group", path, ns.GetContext())
 end
 
 -- Runs after the secure snippet, inside the same button press.
@@ -221,8 +377,9 @@ open:HookScript("OnClick", function(self)
 	local seq = self:GetAttribute("sentseq") or 0
 	if seq ~= lastSeq then
 		lastSeq = seq
-		SendNode(NodeAt(self:GetAttribute("sentpath") or ""))
+		SendNode(NodeAt(self:GetAttribute("sentpath") or "", self:GetAttribute("sentcontext")))
 	end
+	PublishMenu()
 	UpdateMenu()
 end)
 
@@ -277,6 +434,7 @@ events:RegisterEvent("ADDON_LOADED")
 events:RegisterEvent("PLAYER_ENTERING_WORLD")
 events:RegisterEvent("PLAYER_REGEN_ENABLED")
 events:RegisterEvent("UPDATE_MACROS")
+events:RegisterEvent("GROUP_ROSTER_UPDATE")
 events:SetScript("OnEvent", function(_, event, arg1)
 	if event == "ADDON_LOADED" then
 		if arg1 ~= ADDON then return end
@@ -286,9 +444,11 @@ events:SetScript("OnEvent", function(_, event, arg1)
 		if type(VGSChatDB) ~= "table" then VGSChatDB = {} end
 		ns.DB = VGSChatDB
 		if type(ns.DB.menu) ~= "table" then ns.DB.menu = DeepCopy(ns.DefaultMenu) end
-		ns.DB.version = 1
+		ns.MigrateMenu(ns.DB.menu)
+		ns.DB.version = 2
 	end
 	PublishMenu()
+	UpdateMenu()
 	if event == "UPDATE_MACROS" then macrosLoaded = true end
 	if macrosLoaded and not macroReady then macroReady = EnsureMacro() end
 end)
