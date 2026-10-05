@@ -1,7 +1,7 @@
 -- VGS Chat: Tribes 2 Voice Game System style quick chat for WoW Forever gamepads.
 --
 -- The player presses the "VGSChat" macro (placed anywhere on their bars). Its
--- /click hits a SecureHandler button whose snippet takes over A/X/Y/B with
+-- /click hits a SecureHandler button whose snippet takes over A/X/Y/B/LB/RB with
 -- priority override bindings, walks the menu one press at a time, and releases
 -- the buttons again when a message is chosen or B cancels. Binding changes have
 -- to happen in a secure snippet to work in combat.
@@ -23,17 +23,16 @@ local MACRO_FALLBACK_ICON = 134400 -- INV_Misc_QuestionMark
 local MACRO_BODY = "/click VGSChatOpen LeftButton 1"
 
 -- Xbox naming; the PAD codes are the same on every controller.
-local KEYS = { A = "PAD1", B = "PAD2", X = "PAD3", Y = "PAD4" }
+local KEYS = { A = "PAD1", B = "PAD2", X = "PAD3", Y = "PAD4", LB = "PADLSHOULDER", RB = "PADRSHOULDER" }
 local CHOICES = { "A", "X", "Y" }
 local KEY_COLOR = { A = "ff60d060", X = "ff4aa3ff", Y = "ffffd100", B = "ffff5050" }
 
 local function Print(text) print("|cff33ff99VGS Chat|r: " .. text) end
 
 ns.CHOICES, ns.KEY_COLOR, ns.Print = CHOICES, KEY_COLOR, Print
-ns.CHAT_TYPES = { "SAY", "GROUP", "RAID" }
-ns.CHAT_LABELS = { SAY = "Say", GROUP = "Group", RAID = "Raid/Battleground" }
 ns.CONTEXTS = { "DEFAULT", "GROUP", "RAID" }
-ns.CONTEXT_LABELS = { DEFAULT = "Default", GROUP = "Group", RAID = "Raid/BG" }
+-- Retain the saved RAID variant key for existing menus; it is now the BG tab.
+ns.CONTEXT_LABELS = { DEFAULT = "Say", GROUP = "Group", RAID = "Battleground" }
 ns.MAX_DEPTH = 4 -- presses per message, counting the last one
 
 ------------------------------------------------------------------------
@@ -52,9 +51,26 @@ function ns.GetMenu()
 	return ns.DB and ns.DB.menu or ns.DefaultMenu
 end
 
+function ns.IsBattleground()
+	local _, kind = IsInInstance()
+	return kind == "pvp"
+end
+
 function ns.GetContext()
-	if IsInRaid() then return "RAID" end
+	if ns.IsBattleground() then return "RAID" end
 	return IsInGroup() and "GROUP" or "DEFAULT"
+end
+
+local AB_LOCATIONS = { Blacksmith = "BS", ["Lumber Mill"] = "LM", ["Gold Mine"] = "GM", Farm = "Farm", Stables = "ST" }
+function ns.FormatMessage(text, context)
+	local location = "here"
+	if context == "RAID" and ns.IsBattleground() then
+		local _, _, _, _, _, _, _, instanceID = GetInstanceInfo()
+		-- ponytail: English AB subzones only; add localized names or map
+		-- coordinates when supporting other locales or objective boundaries.
+		if instanceID == 529 then location = AB_LOCATIONS[GetSubZoneText()] or "here" end
+	end
+	return (text:gsub("{location}", location))
 end
 
 -- A variant replaces one option (including its children). Missing variants
@@ -74,42 +90,63 @@ end
 function ns.ResolveNode(node, context)
 	node = ns.PickNode(node, context)
 	if not node then return nil end
-	local result = { label = node.label, text = node.text, chat = node.chat }
+	local result = { label = node.label, text = node.text, chat = node.chat, emote = node.emote }
 	if node.text == nil then
 		for _, key in ipairs(CHOICES) do result[key] = ns.ResolveNode(node[key], context) end
 	end
 	return result
 end
 
-function ns.ChannelAvailable(chat, context)
-	return chat == "SAY" or chat == nil or chat == "GROUP" and context ~= "DEFAULT" or chat == "RAID" and context == "RAID"
+function ns.ChannelAvailable(context)
+	return ns.GetChannel(context) ~= nil
 end
 
 -- Group follows the player's current party/raid. Instance chat takes priority
 -- over a separate home group, matching the game's chat channel rules.
 function ns.GetChannel(chat)
-	if not chat or chat == "SAY" then return "SAY" end
+	if not chat or chat == "SAY" or chat == "DEFAULT" then return "SAY" end
 	local instance = IsInGroup(LE_PARTY_CATEGORY_INSTANCE)
 	if chat == "GROUP" then
 		if instance then return "INSTANCE_CHAT" end
 		if IsInRaid() then return "RAID" end
 		if IsInGroup() then return "PARTY" end
 	elseif chat == "RAID" then
-		if instance and IsInRaid(LE_PARTY_CATEGORY_INSTANCE) then return "INSTANCE_CHAT" end
-		if IsInRaid(LE_PARTY_CATEGORY_HOME) then return "RAID" end
+		if ns.IsBattleground() and instance then return "INSTANCE_CHAT" end
 	end
 end
 
+-- Keep legacy destination fields for saved-menu compatibility. Sending now
+-- follows the selected tab, including messages inherited from another tab.
 function ns.MigrateMenu(node)
 	if type(node) ~= "table" then return end
 	if node.text ~= nil then
 		local chat = node.chat and node.chat:upper() or "SAY"
 		if chat == "PARTY" then chat = "GROUP"
 		elseif chat == "INSTANCE_CHAT" or chat == "BATTLEGROUND" then chat = "RAID" end
-		node.chat = ns.CHAT_LABELS[chat] and chat or "SAY"
+		node.chat = (chat == "SAY" or chat == "GROUP" or chat == "RAID") and chat or "SAY"
 	end
 	for _, key in ipairs(CHOICES) do ns.MigrateMenu(node[key]) end
 	for _, variant in pairs(node.variants or {}) do ns.MigrateMenu(variant) end
+end
+
+-- Add new tab defaults only to unchanged stock branches. Explicit overrides
+-- (including disabled slots) and edited Say branches stay intact.
+function ns.UpgradeDefaults(menu)
+	local function Matches(node, default)
+		if not node or not default then return node == default end
+		if node.empty or node.label ~= default.label or node.text ~= default.text or node.emote ~= default.emote then return false end
+		for _, key in ipairs(CHOICES) do if not Matches(node[key], default[key]) then return false end end
+		return true
+	end
+	for _, key in ipairs(CHOICES) do
+		local node, default = menu[key], ns.DefaultMenu[key]
+		if Matches(node, default) and default.variants then
+			node.variants = node.variants or {}
+			for context, variant in pairs(default.variants) do
+				if node.variants[context] == nil then node.variants[context] = DeepCopy(variant) end
+			end
+		end
+	end
 end
 
 local activeMenus = {}
@@ -131,12 +168,13 @@ end
 ------------------------------------------------------------------------
 local open = CreateFrame("Button", "VGSChatOpen", UIParent, "SecureHandlerClickTemplate")
 open:RegisterForClicks("AnyDown")
+for key, binding in pairs(KEYS) do open:SetAttribute("key-" .. key, binding) end
 
--- LeftButton = the macro (toggle); A/X/Y/B = the override-bound pad buttons,
+-- LeftButton = the macro (toggle); A/X/Y/B/LB/RB = override-bound pad buttons,
 -- which click this same button with the letter as the mouse button.
 -- The restricted environment rejects the word "function" anywhere in a
 -- snippet, comments included, so the close steps are repeated inline.
-open:SetAttribute("_onclick", ([[
+open:SetAttribute("_onclick", [[
 	if button == "LeftButton" then
 		if self:GetAttribute("open") then
 			self:ClearBindings()
@@ -146,15 +184,28 @@ open:SetAttribute("_onclick", ([[
 			self:SetAttribute("open", 1)
 			self:SetAttribute("menucontext", self:GetAttribute("state-context") or "DEFAULT")
 			self:SetAttribute("path", "")
-			self:SetBindingClick(true, "%s", "VGSChatOpen", "A")
-			self:SetBindingClick(true, "%s", "VGSChatOpen", "X")
-			self:SetBindingClick(true, "%s", "VGSChatOpen", "Y")
-			self:SetBindingClick(true, "%s", "VGSChatOpen", "B")
+			for prefix in ("NONE SHIFT- CTRL- ALT- CTRL-SHIFT- ALT-SHIFT- ALT-CTRL- ALT-CTRL-SHIFT-"):gmatch("%S+") do
+				if prefix == "NONE" then prefix = "" end
+				for key in ("A X Y B LB RB"):gmatch("%S+") do
+					self:SetBindingClick(true, prefix .. self:GetAttribute("key-" .. key), "VGSChatOpen", key)
+				end
+			end
 		end
 		return
 	end
 
 	if not self:GetAttribute("open") then return end
+	if button == "LB" or button == "RB" then
+		local context = self:GetAttribute("menucontext") or "DEFAULT"
+		if button == "RB" then
+			context = context == "DEFAULT" and "GROUP" or context == "GROUP" and "RAID" or "DEFAULT"
+		else
+			context = context == "DEFAULT" and "RAID" or context == "RAID" and "GROUP" or "DEFAULT"
+		end
+		self:SetAttribute("menucontext", context)
+		self:SetAttribute("path", "")
+		return
+	end
 	if button == "B" then
 		self:ClearBindings()
 		self:SetAttribute("open", nil)
@@ -175,12 +226,20 @@ open:SetAttribute("_onclick", ([[
 	elseif kind == "branch" then
 		self:SetAttribute("path", path)
 	end
-]]):format(KEYS.A, KEYS.X, KEYS.Y, KEYS.B))
+]])
 
 -- Native state drivers can switch between already-published menu shapes in
 -- combat. The context stays fixed during an open menu so button paths don't
 -- change meaning halfway through a selection.
-RegisterStateDriver(open, "context", "[group:raid] RAID; [group] GROUP; DEFAULT")
+local contextDriver
+local function UpdateContextDriver()
+	if InCombatLockdown() then return end
+	-- ponytail: zone changes during combat refresh at combat end; group changes
+	-- use the native state driver immediately, without protected writes.
+	local driver = ns.IsBattleground() and "RAID" or "[group] GROUP; DEFAULT"
+	if driver ~= contextDriver then RegisterStateDriver(open, "context", driver); contextDriver = driver end
+end
+UpdateContextDriver()
 
 -- The snippet only knows the menu's shape, published as node-<path> attributes.
 -- Protected attributes can only be set out of combat. Keep the active data and
@@ -201,10 +260,8 @@ local function PublishMenu()
 			if child then
 				local childPath = path .. key
 				local attributePath = context .. "-" .. childPath
-				if not child.text or ns.ChannelAvailable(child.chat, context) then
-					open:SetAttribute("node-" .. attributePath, child.text and "leaf" or "branch")
-					publishedPaths[attributePath] = true
-				end
+				open:SetAttribute("node-" .. attributePath, child.text and "leaf" or "branch")
+				publishedPaths[attributePath] = true
 				if not child.text then Walk(child, childPath, context) end
 			end
 		end
@@ -235,16 +292,20 @@ end
 ------------------------------------------------------------------------
 local lastSeq = 0
 
-local function SendNode(node)
+local function SendNode(node, context)
 	if not (node and node.text and node.text ~= "") then return end
-	local chatType = ns.GetChannel(node.chat)
+	local chatType = ns.GetChannel(context)
 	if not chatType then
-		Print("Join a " .. (node.chat == "RAID" and "raid or battleground" or "group") .. " to send this message.")
+		Print("Join a " .. (context == "RAID" and "battleground" or "group") .. " to send this message.")
 		return
 	end
 	local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
-	local ok, err = pcall(send, node.text, chatType)
-	if not ok then Print("|cffff5050Couldn't send:|r " .. tostring(err)) end
+	local ok, err = pcall(send, ns.FormatMessage(node.text, context), chatType)
+	if not ok then Print("|cffff5050Couldn't send:|r " .. tostring(err)); return end
+	if node.emote then
+		local emoteOK, emoteError = pcall(DoEmote, node.emote)
+		if not emoteOK then Print("|cffff5050Couldn't play emote:|r " .. tostring(emoteError)) end
+	end
 end
 ns.SendNode = SendNode -- the editor's "Send now" (a click, so /say is allowed)
 
@@ -292,8 +353,19 @@ function ns.CreateMenuView(parent, name)
 	title:SetWordWrap(true)
 
 	local sequence = menu:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	sequence:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
+	sequence:SetWidth(232); sequence:SetWordWrap(false); sequence:SetJustifyH("LEFT")
 	sequence:SetTextColor(0.7, 0.68, 0.63)
+	local tabs = {}
+	for i, context in ipairs(ns.CONTEXTS) do
+		local tab = CreateFrame("Frame", nil, menu)
+		tab:SetSize(({ 52, 64, 104 })[i], 24)
+		tab:SetPoint("TOPLEFT", 14 + ({ 0, 58, 128 })[i], -34)
+		tab.bg = tab:CreateTexture(nil, "BACKGROUND")
+		tab.bg:SetAllPoints()
+		tab.label = tab:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+		tab.label:SetPoint("CENTER"); tab.label:SetText(ns.CONTEXT_LABELS[context])
+		tabs[context] = tab
+	end
 
 	local headerLine = menu:CreateTexture(nil, "ARTWORK")
 	headerLine:SetSize(232, 1)
@@ -317,6 +389,18 @@ function ns.CreateMenuView(parent, name)
 		rows[key] = row
 	end
 
+	local list = CreateFrame("ScrollFrame", nil, menu)
+	local content = CreateFrame("Frame", nil, list)
+	content:SetPoint("TOPLEFT", list, "TOPLEFT", 0, 0)
+	content:SetSize(232, 26)
+	list:SetScrollChild(content)
+	list:EnableMouseWheel(true)
+	list:SetScript("OnMouseWheel", function(self, delta)
+		self.offset = math.max(0, math.min(self.maximum, self.offset - delta * 30))
+		self:SetVerticalScroll(self.offset)
+	end)
+	local leaves = {}
+
 	local footer = CreateFrame("Frame", nil, menu)
 	footer:SetSize(232, 28)
 	local footerLine = footer:CreateTexture(nil, "ARTWORK")
@@ -331,27 +415,82 @@ function ns.CreateMenuView(parent, name)
 	cancel:SetPoint("LEFT", cancelBadge, "RIGHT", 8, 0)
 	cancel:SetText("Cancel")
 	cancel:SetTextColor(0.7, 0.68, 0.63)
+	local scrollHint = footer:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	scrollHint:SetPoint("RIGHT", 0, -4)
+	scrollHint:SetText("Scroll for more")
+	scrollHint:SetTextColor(0.7, 0.68, 0.63)
+	local tabHint = menu:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	tabHint:SetPoint("TOPRIGHT", -14, -12); tabHint:SetText("LB / RB")
+	tabHint:SetTextColor(0.7, 0.68, 0.63)
 
 	function menu:Display(node, heading, path, context)
 		path = path or ""
-		title:SetText(heading)
+		context = context or "DEFAULT"
+		title:SetText("Quick Chat")
+		for tabContext, tab in pairs(tabs) do
+			local active = context == tabContext
+			tab.bg:SetColorTexture(active and 0.22 or 0.12, active and 0.2 or 0.12, active and 0.15 or 0.13, 1)
+			local available = ns.ChannelAvailable(tabContext)
+			tab.label:SetTextColor(active and 1 or (available and 0.8 or 0.5), active and 0.82 or (available and 0.8 or 0.5), active and 0.4 or (available and 0.8 or 0.5))
+		end
+		sequence:SetPoint("TOPLEFT", 14, -62)
 		sequence:SetShown(path ~= "")
-		sequence:SetText((path:gsub(".", "%0  ")):gsub("  $", ""))
-		local y = 12 + title:GetStringHeight() + (path ~= "" and 18 or 0) + 10
+		sequence:SetText(path .. "  -  " .. heading)
+		local y = 64 + (path ~= "" and 18 or 0)
 		headerLine:SetPoint("TOPLEFT", 14, -y)
 		y = y + 5
-		for _, key in ipairs(CHOICES) do
-			local child = node[key]
-			local row = rows[key]
-			row.label:SetText(child and ((child.label ~= "" and child.label) or child.text or "?") or "—")
-			local available = child and (not child.text or ns.ChannelAvailable(child.chat, context or ns.GetContext()))
-			row.label:SetTextColor(available and 0.94 or 0.5, available and 0.92 or 0.5, available and 0.89 or 0.5)
-			row.badge:SetAlpha(available and 1 or 0.35)
-			row.arrow:SetShown(child ~= nil and not child.text)
-			local height = math.max(30, row.label:GetStringHeight() + 12)
-			row:SetHeight(height)
-			row:SetPoint("TOPLEFT", 14, -y)
-			y = y + height
+		local compact = ns.DB and ns.DB.compact == true
+		list:SetShown(not compact)
+		scrollHint:Hide()
+		for _, row in pairs(rows) do row:SetShown(compact) end
+		if compact then
+			for _, key in ipairs(CHOICES) do
+				local child = node[key]
+				local row = rows[key]
+				row.label:SetText(child and ns.FormatMessage((child.label ~= "" and child.label) or child.text or "?", context) or "—")
+				local available = child and ns.ChannelAvailable(context)
+				row.label:SetTextColor(available and 0.94 or 0.5, available and 0.92 or 0.5, available and 0.89 or 0.5)
+				row.badge:SetAlpha(available and 1 or 0.35)
+				row.arrow:SetShown(child ~= nil and not child.text)
+				local height = math.max(30, row.label:GetStringHeight() + 12)
+				row:SetHeight(height)
+				row:SetPoint("TOPLEFT", 14, -y)
+				y = y + height
+			end
+		else
+			local count, height = 0, 0
+			local function Walk(branch, prefix)
+				for _, key in ipairs(CHOICES) do
+					local child = branch[key]
+					if child then
+						local childPath = prefix .. key
+						if child.text ~= nil then
+							count = count + 1
+							local label = leaves[count]
+							if not label then
+								label = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+								label:SetWidth(232); label:SetJustifyH("LEFT"); label:SetWordWrap(true)
+								leaves[count] = label
+							end
+							local available = ns.ChannelAvailable(context)
+							local buttons = available and childPath:gsub(".", function(k) return "|c" .. KEY_COLOR[k] .. k .. "|r" end) or childPath
+							label:SetText(buttons .. " - " .. ns.FormatMessage((child.label ~= "" and child.label) or child.text, context))
+							label:SetTextColor(available and 0.94 or 0.5, available and 0.92 or 0.5, available and 0.89 or 0.5)
+							label:SetPoint("TOPLEFT", 0, -height - 4); label:Show()
+							height = height + math.max(26, label:GetStringHeight() + 8)
+						else Walk(child, childPath) end
+					end
+				end
+			end
+			Walk(node, path)
+			for i = count + 1, #leaves do leaves[i]:Hide() end
+			local visibleHeight = math.min(math.max(26, height), math.max(80, UIParent:GetHeight() - y - 100))
+			content:SetHeight(math.max(26, height))
+			list:SetSize(232, visibleHeight); list:SetPoint("TOPLEFT", 14, -y)
+			list.offset, list.maximum = 0, math.max(0, height - visibleHeight)
+			list:SetVerticalScroll(0)
+			scrollHint:SetShown(list.maximum > 0)
+			y = y + visibleHeight
 		end
 		footer:SetPoint("TOPLEFT", 14, -y - 4)
 		menu:SetHeight(y + 4 + 28 + 12)
@@ -363,21 +502,24 @@ end
 local menu = ns.CreateMenuView(UIParent, "VGSChatMenu")
 menu:SetPoint("LEFT", UIParent, "LEFT", 40, 80)
 menu:SetFrameStrata("HIGH")
+menu:SetClampedToScreen(true)
 
 local function UpdateMenu()
 	if not open:GetAttribute("open") then menu:Hide(); return end
 	local path = open:GetAttribute("path") or ""
 	local context = open:GetAttribute("menucontext") or "DEFAULT"
 	local node = NodeAt(path, context) or activeMenus[context]
-	menu:Display(node, path == "" and "Quick Chat" or (node.label ~= "" and node.label or nil) or "Group", path, ns.GetContext())
+	menu:Display(node, path == "" and "Quick Chat" or (node.label ~= "" and node.label or nil) or "Group", path, context)
 end
+ns.UpdateMenu = UpdateMenu
 
 -- Runs after the secure snippet, inside the same button press.
 open:HookScript("OnClick", function(self)
 	local seq = self:GetAttribute("sentseq") or 0
 	if seq ~= lastSeq then
 		lastSeq = seq
-		SendNode(NodeAt(self:GetAttribute("sentpath") or "", self:GetAttribute("sentcontext")))
+		local context = self:GetAttribute("sentcontext")
+		SendNode(NodeAt(self:GetAttribute("sentpath") or "", context), context)
 	end
 	PublishMenu()
 	UpdateMenu()
@@ -435,6 +577,8 @@ events:RegisterEvent("PLAYER_ENTERING_WORLD")
 events:RegisterEvent("PLAYER_REGEN_ENABLED")
 events:RegisterEvent("UPDATE_MACROS")
 events:RegisterEvent("GROUP_ROSTER_UPDATE")
+events:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+events:RegisterEvent("ZONE_CHANGED")
 events:SetScript("OnEvent", function(_, event, arg1)
 	if event == "ADDON_LOADED" then
 		if arg1 ~= ADDON then return end
@@ -443,10 +587,13 @@ events:SetScript("OnEvent", function(_, event, arg1)
 		ns.savedLoaded = type(VGSChatDB) == "table" and type(VGSChatDB.menu) == "table"
 		if type(VGSChatDB) ~= "table" then VGSChatDB = {} end
 		ns.DB = VGSChatDB
+		if type(ns.DB.compact) ~= "boolean" then ns.DB.compact = false end
 		if type(ns.DB.menu) ~= "table" then ns.DB.menu = DeepCopy(ns.DefaultMenu) end
+		if (tonumber(ns.DB.version) or 0) < 3 then ns.UpgradeDefaults(ns.DB.menu) end
 		ns.MigrateMenu(ns.DB.menu)
-		ns.DB.version = 2
+		ns.DB.version = 3
 	end
+	UpdateContextDriver()
 	PublishMenu()
 	UpdateMenu()
 	if event == "UPDATE_MACROS" then macrosLoaded = true end

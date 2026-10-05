@@ -1,6 +1,6 @@
 ## Interface: 16001
 ## Title: VGS Chat
-## Notes: Tribes 2 style quick chat for gamepads. Press the VGSChat macro, then A/X/Y combos to send a message, B to cancel.
+## Notes: Tribes 2 style quick chat for gamepads. A/X/Y selects messages, LB/RB switches Say/Group/Battleground tabs, B cancels.
 ## Version: 0.2.0
 ## SavedVariables: VGSChatDB
 ## IconTexture: Interface\Icons\Ability_Warrior_BattleShout

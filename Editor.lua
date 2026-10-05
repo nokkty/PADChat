@@ -171,6 +171,10 @@ header:SetScript("OnDragStop", function() editor:StopMovingOrSizing() end)
 Text(header, "GameFontNormalLarge", 18, -12, 320, "VGS Chat")
 local subtitle = Text(header, "GameFontHighlightSmall", 18, -34, 320, "Menu setup")
 subtitle:SetTextColor(0.7, 0.68, 0.63)
+local compact = Button(header, "", WIDTH - 284, -16, 114, function()
+	ns.DB.compact = not ns.DB.compact
+	ns.UpdateMenu(); Refresh(true)
+end)
 local undo = Button(header, "Undo", WIDTH - 160, -16, 66, function()
 	local previous = table.remove(history)
 	if not previous then return end
@@ -245,23 +249,12 @@ end
 local nameLabel, textLabel
 nameLabel, nameBox = Field("Menu label", -76, 40, "label")
 textLabel, textBox = Field("Message", -136, 255, "text")
-local channelLabel = Text(form, "GameFontHighlightSmall", 0, -196, form:GetWidth(), "Send to")
-channelLabel:SetTextColor(0.7, 0.68, 0.63)
-local channels = {}
-for i, chat in ipairs(ns.CHAT_TYPES) do
-	local button = Button(form, ns.CHAT_LABELS[chat], ({ 0, 76, 176 })[i], -214, ({ 66, 90, 176 })[i], function()
-		local node, owned = At(selected)
-		if not owned or not node or node.text == nil or (node.chat or "SAY") == chat then return end
-		Remember(); node.chat = chat; Changed()
-	end)
-	channels[chat] = button
-end
 local emptyHint = Text(form, "GameFontHighlight", 0, -80, form:GetWidth(), "Choose what this button should do.")
 emptyHint:SetWordWrap(true)
 local addMessage = Button(form, "+ Message", 0, -118, 124, function()
 	local node, owned = At(selected)
 	if node or not owned then return end
-	Remember(); Put(selected, { label = "New message", text = "Hello!", chat = "SAY" }); Changed()
+	Remember(); Put(selected, { label = "New message", text = "Hello!" }); Changed()
 end)
 local addGroup = Button(form, "+ Group", 134, -118, 104, function()
 	local node, owned = At(selected)
@@ -381,7 +374,14 @@ local remove = Button(form, "Remove", 132, -264, 80, function()
 	else Delete() end
 end)
 remove.label:SetTextColor(1, 0.4, 0.4)
-local sendNow = Button(form, "Send now", 222, -264, 90, function() ns.SendNode(At(selected)) end)
+local sendNow = Button(form, "Send now", 222, -264, 90, function() ns.SendNode(At(selected), context) end)
+local manaVoice = Button(form, "", 0, -232, 160, function()
+	local node, owned = At(selected)
+	if not owned or not node or node.text == nil then return end
+	Remember()
+	if node.emote == "OOM" then node.emote = nil else node.emote = "OOM" end
+	Changed()
+end)
 local groupHint = Text(form, "GameFontHighlightSmall", 0, -184, form:GetWidth(), "Expand the group in the tree to edit its options.")
 groupHint:SetTextColor(0.7, 0.68, 0.63); groupHint:SetWordWrap(true)
 local previewCaption = Text(form, "GameFontHighlightSmall", 0, -316, form:GetWidth(), "HUD preview")
@@ -449,10 +449,11 @@ local function DrawTree()
 end
 
 Refresh = function(textOnly)
+	compact.label:SetText(ns.DB.compact and "Compact: On" or "Compact: Off")
 	while #selected > 1 and not IsGroup(At(selected:sub(1, -2))) do selected = selected:sub(1, -2) end
 	local node, owned = At(selected)
 	local message, group = node and node.text ~= nil, IsGroup(node)
-	mappingCaption:SetText("Edit mapping  ·  Active: " .. ns.CONTEXT_LABELS[ns.GetContext()])
+	mappingCaption:SetText("Edit tab  ·  Active: " .. ns.CONTEXT_LABELS[ns.GetContext()])
 	for condition, button in pairs(mappings) do
 		local active = condition == context
 		button.bg:SetColorTexture(active and 0.22 or 0.16, active and 0.2 or 0.16, active and 0.15 or 0.17, 1)
@@ -463,7 +464,7 @@ Refresh = function(textOnly)
 	local slotParent, slotKey = Slot(selected)
 	local raw = slotParent[slotKey]
 	inherit:SetEnabled(context ~= "DEFAULT" and raw and raw.variants and raw.variants[context] ~= nil or false)
-	mappingHint:SetText(context == "DEFAULT" and "Default menu · used when solo" or (owned and "Custom mapping · editing this branch" or "Inherited · customize to make changes"))
+	mappingHint:SetText(context == "DEFAULT" and "Say tab · other tabs inherit these options" or (owned and "Custom tab · editing this branch" or "Inherited · customize to make changes"))
 	DrawTree(); undo:SetEnabled(#history > 0)
 	formTitle:SetText("|c" .. ns.KEY_COLOR[selected:sub(-1)] .. selected:sub(-1) .. "|r  " .. (node and Name(node) or "Add an option"))
 	-- Keep long labels in their field; avoid a heading growing into the controls.
@@ -472,24 +473,18 @@ Refresh = function(textOnly)
 	formKind:SetText(Sequence(selected) .. "  ·  " .. (message and "Message" or (group and "Group" or "Empty slot")) .. (context ~= "DEFAULT" and (owned and " · Custom" or " · Inherited") or ""))
 	if not textOnly then nameBox:SetText(node and node.label or ""); textBox:SetText(message and node.text or "") end
 	nameLabel:SetShown(node ~= nil); nameBox:SetShown(node ~= nil)
-	textLabel:SetShown(message); textBox:SetShown(message); channelLabel:SetShown(message)
+	textLabel:SetShown(message); textBox:SetShown(message)
 	for _, box in ipairs({ nameBox, textBox }) do box:EnableMouse(owned); box:EnableKeyboard(owned); box:SetAlpha(owned and 1 or 0.5) end
-	channelLabel:SetText(context == "DEFAULT" and "Send to · available now" or "Send to · " .. ns.CONTEXT_LABELS[context] .. " mapping")
-	for chat, button in pairs(channels) do
-		button:SetShown(message)
-		button:SetEnabled(owned and (ns.GetChannel(chat) ~= nil or context ~= "DEFAULT" and ns.ChannelAvailable(chat, context)))
-		local active = message and (node.chat or "SAY") == chat
-		button.bg:SetColorTexture(active and 0.22 or 0.16, active and 0.2 or 0.16, active and 0.15 or 0.17, 1)
-		button.label:SetTextColor(active and 0.89 or 0.94, active and 0.77 or 0.92, active and 0.48 or 0.89)
-	end
 	emptyHint:SetShown(node == nil); addMessage:SetShown(node == nil); addGroup:SetShown(node == nil)
 	addMessage:SetEnabled(owned); addGroup:SetEnabled(owned and #selected < ns.MAX_DEPTH); groupHint:SetShown(group)
 	moveButton:SetShown(node ~= nil); remove:SetShown(node ~= nil); sendNow:SetShown(message)
-	moveButton:SetEnabled(owned); remove:SetEnabled(owned); sendNow:SetEnabled(message and ns.GetChannel(node.chat) ~= nil or false)
-	local actionY = message and -250 or -136
+	moveButton:SetEnabled(owned); remove:SetEnabled(owned); sendNow:SetEnabled(message and ns.ChannelAvailable(context) or false)
+	manaVoice:SetShown(message); manaVoice:SetEnabled(owned)
+	manaVoice.label:SetText(node and node.emote == "OOM" and "Mana voice: On" or "Mana voice: Off")
+	local actionY = message and -196 or -136
 	moveButton:SetPoint("TOPLEFT", 0, actionY); remove:SetPoint("TOPLEFT", 132, actionY)
 	sendNow:SetPoint("TOPLEFT", 222, actionY)
-	local previewY = message and 302 or (group and 232 or 190)
+	local previewY = message and 284 or (group and 232 or 190)
 	previewCaption:SetPoint("TOPLEFT", 0, -previewY + 22)
 	previewArea:SetPoint("TOPLEFT", 0, -previewY)
 	local parent = group and selected or selected:sub(1, -2)
@@ -522,6 +517,8 @@ local watcher = CreateFrame("Frame")
 watcher:RegisterEvent("PLAYER_REGEN_ENABLED")
 watcher:RegisterEvent("GROUP_ROSTER_UPDATE")
 watcher:RegisterEvent("PLAYER_ENTERING_WORLD")
+watcher:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+watcher:RegisterEvent("ZONE_CHANGED")
 watcher:SetScript("OnEvent", function() if editor:IsShown() then C_Timer.After(0, function() Refresh(true) end) end end)
 local open = _G.VGSChatOpen
 open:HookScript("OnClick", function() if editor:IsShown() then Refresh(true) end end)

@@ -7,9 +7,10 @@
 -- category that opens the next level, up to four presses deep, so "X then Y
 -- then A" works the same as Tribes 2's "V G Y".
 --
--- `chat` is optional: "SAY" (default), "GROUP" or "RAID" (raid/battleground).
--- `variants.GROUP` and `variants.RAID` can replace an option and its subtree;
--- raid variants take priority, and false disables an option in that context.
+-- The selected Say, Group or Battleground tab determines where messages go.
+-- `variants.GROUP` and `variants.RAID` replace options on the Group and
+-- Battleground tabs; Battleground inherits Group, and false clears a slot.
+-- A message can include an `emote` token and a {location} placeholder.
 -- On a PlayStation pad A = Cross, X = Square, Y = Triangle, B = Circle.
 
 local _, ns = ...
@@ -36,5 +37,44 @@ ns.DefaultMenu = {
 		A = { label = "Help!",      text = "Help!" },
 		X = { label = "Incoming!",  text = "Incoming!" },
 		Y = { label = "Follow me",  text = "Follow me!" },
+	},
+}
+
+ns.DefaultMenu.X.variants = {
+	GROUP = { label = "Readiness",
+		A = { label = "Resources",
+			A = { label = "Need mana", text = "Need mana.", emote = "OOM" },
+			X = { label = "Need healing", text = "Need healing, please!" },
+			Y = { label = "Wait up", text = "Wait up!" },
+		},
+		X = { label = "Preparation",
+			A = { label = "Ready", text = "Ready when you are." },
+			X = { label = "Buffs please", text = "Buffs please!" },
+			Y = { label = "Drinking", text = "Drinking, please wait." },
+		},
+	},
+	RAID = { label = "Objectives",
+		A = { label = "Help {location}", text = "Need help at {location}!" },
+		X = { label = "Defend {location}", text = "Defend {location}!" },
+		Y = { label = "{location} clear", text = "{location} clear." },
+	},
+}
+ns.DefaultMenu.Y.variants = {
+	GROUP = { label = "Coordination",
+		A = { label = "Help", text = "Need help!" },
+		X = { label = "Incoming", text = "Incoming!" },
+		Y = { label = "Follow me", text = "Follow me!" },
+	},
+	RAID = { label = "Team",
+		A = { label = "Regroup", text = "Regroup!" },
+		X = { label = "Need healing", text = "Need healing, please!" },
+		Y = { label = "Need mana", text = "Need mana.", emote = "OOM" },
+	},
+}
+ns.DefaultMenu.A.variants = {
+	RAID = { label = "Incoming",
+		A = { label = "2-3 inc {location}", text = "2-3 inc {location}" },
+		X = { label = "4-6 inc {location}", text = "4-6 inc {location}" },
+		Y = { label = "Big INC {location}!", text = "Big INC {location}!" },
 	},
 }
