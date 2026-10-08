@@ -61,6 +61,16 @@ function ns.GetContext()
 	return IsInGroup() and "GROUP" or "DEFAULT"
 end
 
+function ns.GetBattlegroundNode(node, context, instanceID)
+	if not (node and node.battlegrounds and context == "RAID") then return node end
+	if instanceID == nil then
+		if not ns.IsBattleground() then return node end
+		local _, _, _, _, _, _, _, currentID = GetInstanceInfo()
+		instanceID = currentID
+	end
+	return node.battlegrounds[instanceID] or node
+end
+
 local AB_LOCATIONS = { Blacksmith = "BS", ["Lumber Mill"] = "LM", ["Gold Mine"] = "GM", Farm = "Farm", Stables = "ST" }
 function ns.FormatMessage(text, context)
 	local location = "here"
@@ -87,12 +97,13 @@ function ns.PickNode(node, context)
 	return node and not node.empty and node or nil, condition
 end
 
-function ns.ResolveNode(node, context)
+function ns.ResolveNode(node, context, instanceID)
 	node = ns.PickNode(node, context)
+	node = ns.GetBattlegroundNode(node, context, instanceID)
 	if not node then return nil end
 	local result = { label = node.label, text = node.text, chat = node.chat, emote = node.emote }
 	if node.text == nil then
-		for _, key in ipairs(CHOICES) do result[key] = ns.ResolveNode(node[key], context) end
+		for _, key in ipairs(CHOICES) do result[key] = ns.ResolveNode(node[key], context, instanceID) end
 	end
 	return result
 end
@@ -127,11 +138,12 @@ function ns.MigrateMenu(node)
 	end
 	for _, key in ipairs(CHOICES) do ns.MigrateMenu(node[key]) end
 	for _, variant in pairs(node.variants or {}) do ns.MigrateMenu(variant) end
+	for _, battleground in pairs(node.battlegrounds or {}) do ns.MigrateMenu(battleground) end
 end
 
 -- Add new tab defaults only to unchanged stock branches. Explicit overrides
 -- (including disabled slots) and edited Say branches stay intact.
-function ns.UpgradeDefaults(menu)
+function ns.UpgradeDefaults(menu, includeMissing)
 	local function Matches(node, default)
 		if not node or not default then return node == default end
 		if node.empty or node.label ~= default.label or node.text ~= default.text or node.emote ~= default.emote then return false end
@@ -143,20 +155,29 @@ function ns.UpgradeDefaults(menu)
 		if Matches(node, default) and default.variants then
 			node.variants = node.variants or {}
 			for context, variant in pairs(default.variants) do
-				if node.variants[context] == nil then node.variants[context] = DeepCopy(variant) end
+				local saved = node.variants[context]
+				if saved == nil and includeMissing ~= false then node.variants[context] = DeepCopy(variant)
+				elseif Matches(saved, variant) and variant.battlegrounds then
+					saved.battlegrounds = saved.battlegrounds or {}
+					for instanceID, battleground in pairs(variant.battlegrounds) do
+						if saved.battlegrounds[instanceID] == nil then saved.battlegrounds[instanceID] = DeepCopy(battleground) end
+					end
+				end
 			end
 		end
 	end
 end
 
 local activeMenus = {}
-for _, context in ipairs(ns.CONTEXTS) do activeMenus[context] = ns.ResolveNode(ns.DefaultMenu, context) end
+for _, context in ipairs(ns.CONTEXTS) do activeMenus[context] = ns.ResolveNode(ns.DefaultMenu, context, 0) end
+activeMenus.WSG = ns.ResolveNode(ns.DefaultMenu, "RAID", 489)
 
 ------------------------------------------------------------------------
 -- Menu lookup
 ------------------------------------------------------------------------
-local function NodeAt(path, context)
-	local node = activeMenus[context or "DEFAULT"]
+local function NodeAt(path, context, profile)
+	context = context or "DEFAULT"
+	local node = activeMenus[context == "RAID" and profile == "WSG" and "WSG" or context]
 	for i = 1, #path do
 		node = node and node[path:sub(i, i)]
 	end
@@ -182,7 +203,9 @@ open:SetAttribute("_onclick", [[
 			self:SetAttribute("path", "")
 		else
 			self:SetAttribute("open", 1)
-			self:SetAttribute("menucontext", self:GetAttribute("state-context") or "DEFAULT")
+			local context = self:GetAttribute("state-context") or "DEFAULT"
+			self:SetAttribute("menucontext", context == "WSG" and "RAID" or context)
+			self:SetAttribute("menuprofile", context == "WSG" and "WSG" or "DEFAULT")
 			self:SetAttribute("path", "")
 			for prefix in ("NONE SHIFT- CTRL- ALT- CTRL-SHIFT- ALT-SHIFT- ALT-CTRL- ALT-CTRL-SHIFT-"):gmatch("%S+") do
 				if prefix == "NONE" then prefix = "" end
@@ -215,10 +238,12 @@ open:SetAttribute("_onclick", [[
 
 	local path = (self:GetAttribute("path") or "") .. button
 	local context = self:GetAttribute("menucontext") or "DEFAULT"
-	local kind = self:GetAttribute("node-" .. context .. "-" .. path)
+	local shape = context == "RAID" and self:GetAttribute("menuprofile") == "WSG" and "WSG" or context
+	local kind = self:GetAttribute("node-" .. shape .. "-" .. path)
 	if kind == "leaf" then
 		self:SetAttribute("sentpath", path)
 		self:SetAttribute("sentcontext", context)
+		self:SetAttribute("sentprofile", self:GetAttribute("menuprofile"))
 		self:SetAttribute("sentseq", (self:GetAttribute("sentseq") or 0) + 1)
 		self:ClearBindings()
 		self:SetAttribute("open", nil)
@@ -236,7 +261,8 @@ local function UpdateContextDriver()
 	if InCombatLockdown() then return end
 	-- ponytail: zone changes during combat refresh at combat end; group changes
 	-- use the native state driver immediately, without protected writes.
-	local driver = ns.IsBattleground() and "RAID" or "[group] GROUP; DEFAULT"
+	local _, _, _, _, _, _, _, instanceID = GetInstanceInfo()
+	local driver = ns.IsBattleground() and (instanceID == 489 and "WSG" or "RAID") or "[group] GROUP; DEFAULT"
 	if driver ~= contextDriver then RegisterStateDriver(open, "context", driver); contextDriver = driver end
 end
 UpdateContextDriver()
@@ -267,9 +293,11 @@ local function PublishMenu()
 		end
 	end
 	for _, context in ipairs(ns.CONTEXTS) do
-		snapshots[context] = ns.ResolveNode(ns.GetMenu(), context)
+		snapshots[context] = ns.ResolveNode(ns.GetMenu(), context, 0)
 		Walk(snapshots[context], "", context)
 	end
+	snapshots.WSG = ns.ResolveNode(ns.GetMenu(), "RAID", 489)
+	Walk(snapshots.WSG, "", "WSG")
 	activeMenus = snapshots
 	menuDirty = false
 end
@@ -508,7 +536,8 @@ local function UpdateMenu()
 	if not open:GetAttribute("open") then menu:Hide(); return end
 	local path = open:GetAttribute("path") or ""
 	local context = open:GetAttribute("menucontext") or "DEFAULT"
-	local node = NodeAt(path, context) or activeMenus[context]
+	local node = NodeAt(path, context, open:GetAttribute("menuprofile"))
+		or NodeAt("", context, open:GetAttribute("menuprofile"))
 	menu:Display(node, path == "" and "Quick Chat" or (node.label ~= "" and node.label or nil) or "Group", path, context)
 end
 ns.UpdateMenu = UpdateMenu
@@ -519,7 +548,7 @@ open:HookScript("OnClick", function(self)
 	if seq ~= lastSeq then
 		lastSeq = seq
 		local context = self:GetAttribute("sentcontext")
-		SendNode(NodeAt(self:GetAttribute("sentpath") or "", context), context)
+		SendNode(NodeAt(self:GetAttribute("sentpath") or "", context, self:GetAttribute("sentprofile")), context)
 	end
 	PublishMenu()
 	UpdateMenu()
@@ -589,9 +618,10 @@ events:SetScript("OnEvent", function(_, event, arg1)
 		ns.DB = VGSChatDB
 		if type(ns.DB.compact) ~= "boolean" then ns.DB.compact = false end
 		if type(ns.DB.menu) ~= "table" then ns.DB.menu = DeepCopy(ns.DefaultMenu) end
-		if (tonumber(ns.DB.version) or 0) < 3 then ns.UpgradeDefaults(ns.DB.menu) end
+		local version = tonumber(ns.DB.version) or 0
+		if version < 4 then ns.UpgradeDefaults(ns.DB.menu, version < 3) end
 		ns.MigrateMenu(ns.DB.menu)
-		ns.DB.version = 3
+		ns.DB.version = 4
 	end
 	UpdateContextDriver()
 	PublishMenu()

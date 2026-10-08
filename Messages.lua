@@ -11,6 +11,7 @@
 -- `variants.GROUP` and `variants.RAID` replace options on the Group and
 -- Battleground tabs; Battleground inherits Group, and false clears a slot.
 -- A message can include an `emote` token and a {location} placeholder.
+-- `battlegrounds[instanceID]` supplies a menu for a specific battleground.
 -- On a PlayStation pad A = Cross, X = Square, Y = Triangle, B = Circle.
 
 local _, ns = ...
@@ -76,5 +77,21 @@ ns.DefaultMenu.A.variants = {
 		A = { label = "2-3 inc {location}", text = "2-3 inc {location}" },
 		X = { label = "4-6 inc {location}", text = "4-6 inc {location}" },
 		Y = { label = "Big INC {location}!", text = "Big INC {location}!" },
+	},
+}
+
+-- These replacements keep the same button paths as the generic BG menu.
+ns.DefaultMenu.A.variants.RAID.battlegrounds = {
+	[489] = { label = "Flag route",
+		A = { label = "Flag going ramp", text = "Flag going ramp!" },
+		X = { label = "Flag going tunnel", text = "Flag going tunnel!" },
+		Y = { label = "Flag going graveyard", text = "Flag going graveyard!" },
+	},
+}
+ns.DefaultMenu.X.variants.RAID.battlegrounds = {
+	[489] = { label = "Flag support",
+		A = { label = "Escort our carrier", text = "Escort our flag carrier!" },
+		X = { label = "Intercept enemy carrier", text = "Intercept the enemy flag carrier!" },
+		Y = { label = "Return our flag", text = "Return our flag!" },
 	},
 }

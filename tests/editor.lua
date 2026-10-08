@@ -4,9 +4,10 @@ local objects, combat, secure = {}, false, false
 local homeGroup, instanceGroup = "SOLO", "SOLO"
 local instanceType = "none"
 local instanceID, subzone = 529, ""
+local subzoneReads = 0
 function IsInInstance() return instanceType ~= "none", instanceType end
 function GetInstanceInfo() return "Arathi Basin", instanceType, 0, "", 0, 0, false, instanceID end
-function GetSubZoneText() return subzone end
+function GetSubZoneText() subzoneReads = subzoneReads + 1; return subzone end
 LE_PARTY_CATEGORY_HOME, LE_PARTY_CATEGORY_INSTANCE = 1, 2
 function IsInGroup(category)
 	if category == LE_PARTY_CATEGORY_HOME then return homeGroup ~= "SOLO" end
@@ -91,9 +92,9 @@ function CreateFrame(...) return Object(...) end
 UIParent = Object("Frame"); UIParent:SetSize(960, 540)
 function InCombatLockdown() return combat end
 function RegisterStateDriver(frame, state, driver)
-	assert(not combat and state == "context" and (driver == "[group] GROUP; DEFAULT" or driver == "RAID"))
+	assert(not combat and state == "context" and (driver == "[group] GROUP; DEFAULT" or driver == "RAID" or driver == "WSG"))
 	frame.driver = driver
-	frame:SetAttribute("state-context", driver == "RAID" and "RAID" or IsInGroup() and "GROUP" or "DEFAULT")
+	frame:SetAttribute("state-context", driver ~= "[group] GROUP; DEFAULT" and driver or IsInGroup() and "GROUP" or "DEFAULT")
 end
 function wipe(t) for key in pairs(t) do t[key] = nil end end
 C_Timer = { After = function(_, fn) fn() end }
@@ -154,7 +155,7 @@ local function Group(home, instance, kind)
 	instanceType = kind or "none"
 	-- Emulate the native secure state driver (including in combat).
 	secure = true
-	VGSChatOpen:SetAttribute("state-context", VGSChatOpen.driver == "RAID" and "RAID" or IsInGroup() and "GROUP" or "DEFAULT")
+	VGSChatOpen:SetAttribute("state-context", VGSChatOpen.driver ~= "[group] GROUP; DEFAULT" and VGSChatOpen.driver or IsInGroup() and "GROUP" or "DEFAULT")
 	secure = false
 	Event("GROUP_ROSTER_UPDATE")
 end
@@ -439,7 +440,7 @@ view:Hide()
 ns.DefaultMenu = shippedDefaults
 VGSChatDB = nil; Event("ADDON_LOADED", "VGSChat")
 ns.MenuChanged()
-assert(ns.DB.version == 3 and ns.savedLoaded == false)
+assert(ns.DB.version == 4 and ns.savedLoaded == false)
 assert(ns.ResolveNode(ns.GetMenu(), "GROUP").X.A.A.emote == "OOM")
 Group("PARTY"); combat = true
 Pad("LeftButton"); Pad("X"); Pad("A")
@@ -493,7 +494,7 @@ for _, key in ipairs(ns.CHOICES) do legacyMenu[key].variants = nil end
 legacyMenu.X.variants = { GROUP = { label = "My group", A = { label = "Custom", text = "Custom!" } }, RAID = false }
 legacyMenu.Y.A.text = "My help"
 VGSChatDB = { menu = legacyMenu, compact = true, version = 2 }; Event("ADDON_LOADED", "VGSChat")
-assert(ns.DB.version == 3 and ns.DB.compact)
+assert(ns.DB.version == 4 and ns.DB.compact)
 assert(ns.DB.menu.X.variants.GROUP.A.text == "Custom!" and ns.DB.menu.X.variants.RAID == false)
 assert(ns.DB.menu.Y.A.text == "My help" and ns.DB.menu.Y.variants == nil)
 assert(ns.DB.menu.A.variants.RAID.A.text == "2-3 inc {location}")
@@ -501,4 +502,71 @@ ns.DB.menu.A.variants.RAID.A.text = "Edited incoming"
 Event("ADDON_LOADED", "VGSChat"); assert(ns.DB.menu.A.variants.RAID.A.text == "Edited incoming")
 assert(shippedDefaults.A.variants.RAID.A.text == "2-3 inc {location}")
 
-print("Editor checks passed: group/BG defaults, mana voice, live AB objectives, migration, smart tabs, binding cleanup, scrolling, editing, inheritance, undo, and combat snapshots.")
+-- Warsong has fixed CTF calls, independent of subzone names. Both HUD modes
+-- and secure sends use the Warsong profile, including manual tab switching.
+ns.ResetToDefaults(); ns.DB.compact = false
+instanceID = 489; subzone = "Blacksmith"; Group(nil, "RAID", "pvp")
+local readsBeforeWarsong = subzoneReads
+combat = true; Pad("LeftButton")
+assert(VGSChatOpen:GetAttribute("menucontext") == "RAID" and VGSChatOpen:GetAttribute("menuprofile") == "WSG")
+assert(table.concat(LeafLabels(VGSChatMenu), ",") == "AA - Flag going ramp,AX - Flag going tunnel,AY - Flag going graveyard,XA - Escort our carrier,XX - Intercept enemy carrier,XY - Return our flag,YA - Regroup,YX - Need healing,YY - Need mana")
+Pad("LB"); assert(VGSChatOpen:GetAttribute("menucontext") == "GROUP")
+Pad("RB"); assert(LeafLabels(VGSChatMenu)[1] == "AA - Flag going ramp")
+Pad("B"); Released()
+for _, call in ipairs({
+	{ "AA", "Flag going ramp!" }, { "AX", "Flag going tunnel!" },
+	{ "AY", "Flag going graveyard!" }, { "XA", "Escort our flag carrier!" },
+	{ "XX", "Intercept the enemy flag carrier!" }, { "XY", "Return our flag!" },
+}) do
+	Pad("LeftButton")
+	for key in call[1]:gmatch(".") do Pad(key) end
+	assert(sent[1] == call[2] and sent[2] == "INSTANCE_CHAT"); Released()
+end
+assert(subzoneReads == readsBeforeWarsong, "Warsong calls must not read the player's subzone")
+combat = false; Event("PLAYER_ENTERING_WORLD"); Click(Button("Compact: Off"))
+Pad("LeftButton")
+assert(Find(function(o) return o.kind == "Text" and o.parent.parent == VGSChatMenu and o.text == "Flag route" end))
+Pad("A")
+assert(Find(function(o) return o.kind == "Text" and o.parent.parent == VGSChatMenu and o.text == "Flag going tunnel" end))
+Pad("X"); assert(sent[1] == "Flag going tunnel!")
+Click(Button("Compact: On"))
+
+-- Editing Warsong preserves AB, undo, and open-menu snapshots. Its separately
+-- published shape also allows editing the layout without breaking combat input.
+Click(Button("Battleground")); Select("A")
+if not Find(function(o) return o.path == "AA" and o.selection ~= nil end, true) then Expand("A") end
+Select("AA"); Pad("LeftButton"); Pad("A")
+Type(Field(-154), "Flag moving ramp!"); assert(ns.IsPublishPending())
+Pad("A"); assert(sent[1] == "Flag going ramp!")
+Pad("LeftButton"); Pad("A"); Pad("A"); assert(sent[1] == "Flag moving ramp!")
+assert(ns.DB.menu.A.variants.RAID.A.text == "2-3 inc {location}")
+Undo(); Select("AX"); Click(Button("Remove")); Click(Button("+ Group"))
+Select("AXA"); Click(Button("+ Message"))
+assert(VGSChatOpen:GetAttribute("node-WSG-AX") == "branch" and VGSChatOpen:GetAttribute("node-RAID-AX") == "leaf")
+combat = true; Pad("LeftButton"); Pad("A"); Pad("X")
+assert(VGSChatOpen:GetAttribute("open") and VGSChatOpen:GetAttribute("path") == "AX")
+Pad("A"); assert(sent[1] == "Hello!" and sent[2] == "INSTANCE_CHAT"); Released()
+combat = false; Undo(); Undo(); Undo()
+instanceID = 529; Event("ZONE_CHANGED_NEW_AREA")
+Pad("LeftButton"); Pad("A"); Pad("A"); assert(sent[1] == "2-3 inc BS")
+instanceID = 30; Event("ZONE_CHANGED_NEW_AREA")
+Pad("LeftButton"); Pad("A"); Pad("A"); assert(sent[1] == "2-3 inc here")
+
+-- Version-three profiles gain Warsong only on stock BG branches; customized
+-- messages and intentionally restored inheritance survive the version upgrade.
+local versionThree = ns.CopyMenu(shippedDefaults)
+versionThree.A.variants.RAID.battlegrounds = nil
+versionThree.X.variants.RAID.battlegrounds = nil
+versionThree.X.variants.RAID.A.text = "Custom defense."
+versionThree.Y.variants.GROUP = nil
+VGSChatDB = { menu = versionThree, compact = false, version = 3 }
+Event("ADDON_LOADED", "VGSChat")
+assert(ns.DB.version == 4 and ns.DB.menu.A.variants.RAID.battlegrounds[489].A.text == "Flag going ramp!")
+assert(ns.DB.menu.X.variants.RAID.A.text == "Custom defense." and ns.DB.menu.X.variants.RAID.battlegrounds == nil)
+assert(ns.DB.menu.Y.variants.GROUP == nil)
+ns.DB.menu.A.variants.RAID.battlegrounds[489].A.text = "Custom flag call!"
+ns.DB.version = 3; Event("ADDON_LOADED", "VGSChat")
+assert(ns.DB.menu.A.variants.RAID.battlegrounds[489].A.text == "Custom flag call!")
+assert(shippedDefaults.A.variants.RAID.battlegrounds[489].A.text == "Flag going ramp!")
+
+print("Editor checks passed: Warsong CTF calls and editing, AB objectives, BG migrations, mana voice, smart tabs, binding cleanup, scrolling, inheritance, undo, and combat snapshots.")

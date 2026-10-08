@@ -16,6 +16,7 @@ local function Slot(path)
 	for i = 1, #path - 1 do
 		local condition
 		node, condition = ns.PickNode(node[path:sub(i, i)], context)
+		node = ns.GetBattlegroundNode(node, context)
 		owned = condition == context or owned and condition == nil
 		if not node or node.text ~= nil then return nil end
 	end
@@ -26,6 +27,7 @@ local function At(path)
 	local parent, key, owned = Slot(path)
 	if not parent then return nil, false end
 	local node, condition = ns.PickNode(parent[key], context)
+	node = ns.GetBattlegroundNode(node, context)
 	return node, condition == context or owned and condition == nil
 end
 local function Put(path, node)
