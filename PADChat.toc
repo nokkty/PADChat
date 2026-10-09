@@ -3,7 +3,7 @@
 ## Notes: Tribes 2 style quick chat for gamepads. A/X/Y selects messages, LB/RB switches Say/Group tabs, B cancels.
 ## Version: 0.2.0
 ## SavedVariables: PADChatDB
-## IconTexture: Interface\Icons\Ability_Warrior_BattleShout
+## IconTexture: Interface\AddOns\PADChat\Media\Gamepad
 
 Messages.lua
 PADChat.lua
