@@ -1,7 +1,6 @@
--- Tree-and-details editor, opened by the VGSEdit macro or /vgs.
--- Custom controls only: no Blizzard widget templates or UISpecialFrames (the
--- latter taints Forever's gamepad chat focus stack). /vgs is a deliberate
--- exception for keyboard players, though slash commands may taint it too.
+-- Tree-and-details editor, opened by the PADEdit macro or the minimap button.
+-- Custom controls only: no Blizzard widget templates, UISpecialFrames or slash
+-- commands (they taint Forever's gamepad chat focus stack).
 local _, ns = ...
 local WIDTH, HEIGHT, SPLIT = 760, 650, 350
 local selected, expanded = "A", { X = true, XA = true }
@@ -159,7 +158,7 @@ local function Scroll(parent, x, y, width, height)
 	return scroll
 end
 
-local editor = CreateFrame("Frame", "VGSChatEditor", UIParent)
+local editor = CreateFrame("Frame", "PADChatEditor", UIParent)
 editor:SetSize(WIDTH, HEIGHT); editor:SetPoint("CENTER"); editor:SetFrameStrata("DIALOG")
 editor:SetToplevel(true); editor:SetMovable(true); editor:SetClampedToScreen(true); editor:EnableMouse(true)
 Surface(editor, 0.09, 0.09, 0.1)
@@ -169,7 +168,7 @@ header:SetPoint("TOPLEFT", 1, -1); header:SetSize(WIDTH - 2, 60)
 header:EnableMouse(true); header:RegisterForDrag("LeftButton")
 header:SetScript("OnDragStart", function() editor:StartMoving() end)
 header:SetScript("OnDragStop", function() editor:StopMovingOrSizing() end)
-Text(header, "GameFontNormalLarge", 18, -12, 320, "VGS Chat")
+Text(header, "GameFontNormalLarge", 18, -12, 320, "PAD Chat")
 local subtitle = Text(header, "GameFontHighlightSmall", 18, -34, 320, "Menu setup")
 subtitle:SetTextColor(0.7, 0.68, 0.63)
 local compact = Button(header, "", WIDTH - 284, -16, 114, function()
@@ -583,14 +582,11 @@ Refresh = function(textOnly)
 	end
 end
 
-local toggle = CreateFrame("Button", "VGSChatEditorToggle", UIParent)
+local toggle = CreateFrame("Button", "PADChatEditorToggle", UIParent)
 toggle:RegisterForClicks("AnyUp", "AnyDown")
--- VGSEdit, /vgs and the minimap button all open the editor through this.
+-- PADEdit and the minimap button all open the editor through this.
 function ns.ToggleEditor() editor:SetShown(not editor:IsShown()) end
 toggle:SetScript("OnClick", ns.ToggleEditor)
--- /vgs toggles the editor for keyboard players; gamepad players use VGSEdit.
-SLASH_VGSCHAT1 = "/vgs"
-SlashCmdList.VGSCHAT = ns.ToggleEditor
 editor:SetScript("OnShow", function()
 	editor:SetScale(math.min(1, (UIParent:GetWidth() - 32) / WIDTH, (UIParent:GetHeight() - 32) / HEIGHT))
 	Refresh()
@@ -606,5 +602,5 @@ watcher:RegisterEvent("PLAYER_ENTERING_WORLD")
 watcher:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 watcher:RegisterEvent("ZONE_CHANGED")
 watcher:SetScript("OnEvent", function() if editor:IsShown() then C_Timer.After(0, function() Refresh(true) end) end end)
-local open = _G.VGSChatOpen
+local open = _G.PADChatOpen
 open:HookScript("OnClick", function() if editor:IsShown() then Refresh(true) end end)

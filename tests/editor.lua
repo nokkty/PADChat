@@ -85,7 +85,7 @@ end
 function methods:ClearFocus() if self.scripts.OnEditFocusLost then self.scripts.OnEditFocusLost(self) end end
 function methods:ClearBindings() self.bound, self.bindings = false, {} end
 function methods:SetBindingClick(priority, key, target, button)
-	assert(secure and priority and target == "VGSChatOpen")
+	assert(secure and priority and target == "PADChatOpen")
 	self.bindings = self.bindings or {}; self.bindings[key] = button; self.bound = true
 end
 function CreateFrame(...) return Object(...) end
@@ -109,19 +109,19 @@ local sent
 local emotes = {}
 function DoEmote(token) emotes[#emotes + 1] = token end
 function SendChatMessage(text, channel) sent = { text, channel } end
-local ns = {}
-assert(loadfile("Messages.lua"))("VGSChat", ns)
-assert(loadfile("VGSChat.lua"))("VGSChat", ns)
+local ns = { BATTLEGROUNDS_ENABLED = true } -- keep the post-launch BG paths covered
+assert(loadfile("Messages.lua"))("PADChat", ns)
+assert(loadfile("PADChat.lua"))("PADChat", ns)
 local shippedDefaults = ns.CopyMenu(ns.DefaultMenu)
 -- Exercise the existing editor and inheritance against a pre-upgrade menu;
 -- the new shipped defaults and upgrade are checked separately below.
 for _, key in ipairs(ns.CHOICES) do ns.DefaultMenu[key].variants = nil end
 for _, frame in ipairs(objects) do
-	if frame.events.ADDON_LOADED then frame.scripts.OnEvent(frame, "ADDON_LOADED", "VGSChat") end
+	if frame.events.ADDON_LOADED then frame.scripts.OnEvent(frame, "ADDON_LOADED", "PADChat") end
 end
-assert(loadfile("Editor.lua"))("VGSChat", ns)
-assert(loadfile("MinimapButton.lua"))("VGSChat", ns)
-VGSChatEditor:Show()
+assert(loadfile("Editor.lua"))("PADChat", ns)
+assert(loadfile("MinimapButton.lua"))("PADChat", ns)
+PADChatEditor:Show()
 local function Find(predicate, optional)
 	for _, obj in ipairs(objects) do if obj:IsVisible() and predicate(obj) then return obj end end
 	if optional then return nil end
@@ -152,13 +152,13 @@ local function Move(from, to)
 end
 local function Pad(button)
 	secure = true
-	local env = { self = VGSChatOpen, button = button }
-	local snippet = VGSChatOpen.attributes._onclick
+	local env = { self = PADChatOpen, button = button }
+	local snippet = PADChatOpen.attributes._onclick
 	local chunk = loadstring and setfenv(assert(loadstring(snippet, "secure click")), env)
 		or assert(load(snippet, "secure click", "t", env))
 	chunk()
 	secure = false
-	for _, fn in ipairs(VGSChatOpen.hooks.OnClick) do fn(VGSChatOpen) end
+	for _, fn in ipairs(PADChatOpen.hooks.OnClick) do fn(PADChatOpen) end
 end
 local function Event(event, arg)
 	for _, frame in ipairs(objects) do if frame.events[event] and frame.scripts.OnEvent then frame.scripts.OnEvent(frame, event, arg) end end
@@ -168,7 +168,7 @@ local function Group(home, instance, kind)
 	instanceType = kind or "none"
 	-- Emulate the native secure state driver (including in combat).
 	secure = true
-	VGSChatOpen:SetAttribute("state-context", VGSChatOpen.driver ~= "[group] GROUP; DEFAULT" and VGSChatOpen.driver or IsInGroup() and "GROUP" or "DEFAULT")
+	PADChatOpen:SetAttribute("state-context", PADChatOpen.driver ~= "[group] GROUP; DEFAULT" and PADChatOpen.driver or IsInGroup() and "GROUP" or "DEFAULT")
 	secure = false
 	Event("GROUP_ROSTER_UPDATE")
 end
@@ -186,37 +186,41 @@ end
 -- Expanded is the saved default; both views use the same secure button paths.
 assert(ns.DB.compact == false)
 Pad("LeftButton")
-local labels = LeafLabels(VGSChatMenu)
+local labels = LeafLabels(PADChatMenu)
 assert(table.concat(labels, ",") == "AA - Yes,AX - No,AY - Thanks,XAA - Hello,XAX - Goodbye,XAY - Wave,XXA - Invite please!,XXX - Want to group?,XXY - Inviting you,YA - Help!,YX - Incoming!,YY - Follow me")
-local expandedHeight = VGSChatMenu:GetHeight()
+local expandedHeight = PADChatMenu:GetHeight()
 Click(Button("Compact: Off"))
-assert(ns.DB.compact and VGSChatMenu:GetHeight() < expandedHeight and #LeafLabels(VGSChatMenu) == 0)
-assert(Find(function(o) return o.kind == "Text" and o.parent.parent == VGSChatMenu and o.text == "Respond" end))
-Event("ADDON_LOADED", "VGSChat"); assert(ns.DB.compact, "Loading saved settings must preserve Compact")
+assert(ns.DB.compact and PADChatMenu:GetHeight() < expandedHeight and #LeafLabels(PADChatMenu) == 0)
+assert(Find(function(o) return o.kind == "Text" and o.parent.parent == PADChatMenu and o.text == "Respond" end))
+Event("ADDON_LOADED", "PADChat"); assert(ns.DB.compact, "Loading saved settings must preserve Compact")
 combat = true
 Click(Button("Compact: On")); Pad("X"); Pad("A")
-assert(table.concat(LeafLabels(VGSChatMenu), ",") == "XAA - Hello,XAX - Goodbye,XAY - Wave")
-Click(Button("Compact: Off")); assert(VGSChatOpen:GetAttribute("path") == "XA")
-Pad("A"); assert(sent[1] == "Hello" and not VGSChatMenu:IsShown())
+assert(table.concat(LeafLabels(PADChatMenu), ",") == "XAA - Hello,XAX - Goodbye,XAY - Wave")
+Click(Button("Compact: Off")); assert(PADChatOpen:GetAttribute("path") == "XA")
+Pad("A"); assert(sent[1] == "Hello" and not PADChatMenu:IsShown())
 combat = false; Click(Button("Compact: On"))
 
 -- Shoulder overrides cover modifier keys, wrap tabs, reset a partial sequence,
 -- and release on send, cancel, and macro toggle. Closed menus ignore shoulders.
 local function Released()
-	assert(not VGSChatOpen.bound and next(VGSChatOpen.bindings) == nil and not VGSChatMenu:IsShown())
+	assert(not PADChatOpen.bound and next(PADChatOpen.bindings) == nil and not PADChatMenu:IsShown())
 end
 Pad("RB"); Released()
 Pad("LeftButton")
-assert(VGSChatOpen:GetAttribute("menucontext") == "DEFAULT")
-assert(VGSChatOpen.bindings.PADLSHOULDER == "LB" and VGSChatOpen.bindings.PADRSHOULDER == "RB")
-assert(VGSChatOpen.bindings["CTRL-PAD1"] == "A" and VGSChatOpen.bindings["ALT-CTRL-SHIFT-PADRSHOULDER"] == "RB")
+assert(PADChatOpen:GetAttribute("menucontext") == "DEFAULT")
+assert(PADChatOpen.bindings.PADLSHOULDER == "LB" and PADChatOpen.bindings.PADRSHOULDER == "RB")
+assert(PADChatOpen.bindings["CTRL-PAD1"] == "A" and PADChatOpen.bindings["ALT-CTRL-SHIFT-PADRSHOULDER"] == "RB")
 Pad("X"); Pad("A"); Pad("RB")
-assert(VGSChatOpen:GetAttribute("menucontext") == "GROUP" and VGSChatOpen:GetAttribute("path") == "")
-Pad("RB"); assert(VGSChatOpen:GetAttribute("menucontext") == "RAID")
-Pad("RB"); assert(VGSChatOpen:GetAttribute("menucontext") == "DEFAULT")
-Pad("LB"); assert(VGSChatOpen:GetAttribute("menucontext") == "RAID")
-Pad("LB"); assert(VGSChatOpen:GetAttribute("menucontext") == "GROUP")
-Pad("LB"); assert(VGSChatOpen:GetAttribute("menucontext") == "DEFAULT")
+assert(PADChatOpen:GetAttribute("menucontext") == "GROUP" and PADChatOpen:GetAttribute("path") == "")
+Pad("RB"); assert(PADChatOpen:GetAttribute("menucontext") == "RAID")
+Pad("RB"); assert(PADChatOpen:GetAttribute("menucontext") == "DEFAULT")
+Pad("LB"); assert(PADChatOpen:GetAttribute("menucontext") == "RAID")
+Pad("LB"); assert(PADChatOpen:GetAttribute("menucontext") == "GROUP")
+Pad("LB"); assert(PADChatOpen:GetAttribute("menucontext") == "DEFAULT")
+PADChatOpen:SetAttribute("battlegrounds", false) -- beta: the BG tab is skipped
+Pad("RB"); Pad("RB"); assert(PADChatOpen:GetAttribute("menucontext") == "DEFAULT")
+Pad("LB"); assert(PADChatOpen:GetAttribute("menucontext") == "GROUP")
+PADChatOpen:SetAttribute("battlegrounds", true)
 Pad("B"); Released()
 Pad("LeftButton"); Pad("LeftButton"); Released()
 
@@ -232,7 +236,7 @@ for _, scenario in ipairs({
 	{ "PARTY", "RAID", "pvp", "RAID", "INSTANCE_CHAT" },
 }) do
 	Group(scenario[1], scenario[2], scenario[3]); combat = true
-	Pad("LeftButton"); assert(VGSChatOpen:GetAttribute("menucontext") == scenario[4])
+	Pad("LeftButton"); assert(PADChatOpen:GetAttribute("menucontext") == scenario[4])
 	Pad("A"); Pad("A"); assert(sent[1] == "Yes!" and sent[2] == scenario[5]); Released()
 	combat = false
 end
@@ -247,10 +251,10 @@ combat = false
 -- Entering a battleground during lockdown defers only the automatic default;
 -- manual tab switching works immediately, and combat end refreshes the driver.
 combat = true; Group(nil, "RAID", "pvp"); Event("ZONE_CHANGED_NEW_AREA")
-Pad("LeftButton"); assert(VGSChatOpen:GetAttribute("menucontext") == "GROUP")
+Pad("LeftButton"); assert(PADChatOpen:GetAttribute("menucontext") == "GROUP")
 Pad("RB"); Pad("A"); Pad("A"); assert(sent[2] == "INSTANCE_CHAT"); Released()
 combat = false; Event("PLAYER_REGEN_ENABLED")
-Pad("LeftButton"); assert(VGSChatOpen:GetAttribute("menucontext") == "RAID")
+Pad("LeftButton"); assert(PADChatOpen:GetAttribute("menucontext") == "RAID")
 Pad("B"); Released(); Group()
 
 -- No Blizzard control templates were introduced.
@@ -332,11 +336,11 @@ assert(ns.DB.menu.X.A.A.text == defaultSocial.A.A.text)
 assert(ns.ResolveNode(ns.GetMenu(), "GROUP").X.A.A.text == "Thanks for the group!")
 combat = true; Group("PARTY")
 Pad("LeftButton"); Pad("X"); Pad("A")
-assert(LeafLabels(VGSChatMenu)[1] == "XAA - Thanks for the group")
+assert(LeafLabels(PADChatMenu)[1] == "XAA - Thanks for the group")
 Pad("A")
 assert(sent[1] == "Thanks for the group!" and sent[2] == "PARTY")
 Pad("LeftButton"); Pad("LB"); Pad("X"); Pad("A")
-assert(LeafLabels(VGSChatMenu)[1] == "XAA - Hello", "Switching to Say must restore its own mapping")
+assert(LeafLabels(PADChatMenu)[1] == "XAA - Hello", "Switching to Say must restore its own mapping")
 Pad("A"); assert(sent[1] == "Hello" and sent[2] == "SAY")
 Group("RAID"); Pad("LeftButton"); Pad("X"); Pad("A"); Pad("A")
 assert(sent[1] == "Thanks for the group!" and sent[2] == "RAID", "Raid inherits the broad Group override")
@@ -350,7 +354,7 @@ Select("XAA"); Type(Field(-154), "Thanks for the raid!")
 Group(nil, "RAID", "pvp"); Pad("LeftButton"); Pad("X"); Pad("A"); Pad("A")
 assert(sent[1] == "Thanks for the raid!" and sent[2] == "INSTANCE_CHAT")
 Pad("LeftButton"); Pad("LB"); Pad("X"); Pad("A")
-assert(LeafLabels(VGSChatMenu)[1] == "XAA - Thanks for the group", "Switching from Battleground must restore Group's mapping")
+assert(LeafLabels(PADChatMenu)[1] == "XAA - Thanks for the group", "Switching from Battleground must restore Group's mapping")
 Pad("A"); assert(sent[1] == "Thanks for the group!" and sent[2] == "INSTANCE_CHAT")
 Group("PARTY"); Pad("LeftButton"); Pad("X"); Pad("A"); Pad("A")
 assert(sent[1] == "Thanks for the group!" and sent[2] == "PARTY")
@@ -398,12 +402,12 @@ assert(ns.DB.menu.X.variants.GROUP == false)
 Click(Button("+ Message")); Type(Field(-94), "Thanks for the group"); Type(Field(-154), "Thanks for the group!")
 assert(ns.DB.menu.X.A.A.text == "Hello")
 combat = true
-Group(); Pad("LeftButton"); Pad("X"); assert(VGSChatOpen:GetAttribute("path") == "X")
+Group(); Pad("LeftButton"); Pad("X"); assert(PADChatOpen:GetAttribute("path") == "X")
 Pad("A"); Pad("A"); assert(sent[1] == "Hello")
 Group("PARTY"); Pad("LeftButton"); Pad("X")
-assert(not VGSChatOpen:GetAttribute("open") and sent[1] == "Thanks for the group!" and sent[2] == "PARTY")
+assert(not PADChatOpen:GetAttribute("open") and sent[1] == "Thanks for the group!" and sent[2] == "PARTY")
 combat = false; Group(nil, "RAID", "pvp"); combat = true
-Pad("LeftButton"); Pad("X"); assert(VGSChatOpen:GetAttribute("path") == "X")
+Pad("LeftButton"); Pad("X"); assert(PADChatOpen:GetAttribute("path") == "X")
 Pad("A"); Pad("A"); assert(sent[1] == "Thanks for the raid!" and sent[2] == "INSTANCE_CHAT")
 combat = false; Group(); Event("PLAYER_REGEN_ENABLED")
 
@@ -451,13 +455,13 @@ view:Hide()
 
 -- A new profile and Reset both install distinct Group/Battleground defaults.
 ns.DefaultMenu = shippedDefaults
-VGSChatDB = nil; Event("ADDON_LOADED", "VGSChat")
+PADChatDB = nil; Event("ADDON_LOADED", "PADChat")
 ns.MenuChanged()
 assert(ns.DB.version == 5 and ns.savedLoaded == false)
 assert(ns.ResolveNode(ns.GetMenu(), "GROUP").X.A.A.emote == "OOM")
 Group("PARTY"); combat = true
 Pad("LeftButton"); Pad("X"); Pad("A")
-assert(LeafLabels(VGSChatMenu)[1] == "XAA - Need mana")
+assert(LeafLabels(PADChatMenu)[1] == "XAA - Need mana")
 Pad("A"); assert(sent[1] == "Need mana." and sent[2] == "PARTY" and emotes[#emotes] == "OOM"); Released()
 local voiceCount = #emotes
 Pad("LeftButton"); Pad("X"); Pad("A"); Pad("Y")
@@ -467,11 +471,11 @@ assert(sent[1] == "Wait up!" and #emotes == voiceCount)
 -- with no channel. Goodbye says its line and waves.
 Group()
 Pad("LeftButton"); Pad("X"); Pad("A")
-assert(table.concat(LeafLabels(VGSChatMenu), ",") == "XAA - Hello,XAX - Goodbye,XAY - Wave")
+assert(table.concat(LeafLabels(PADChatMenu), ",") == "XAA - Hello,XAX - Goodbye,XAY - Wave")
 local previousSend = sent
 Pad("Y")
 assert(#emotes == voiceCount + 1 and emotes[#emotes] == "WAVE" and sent == previousSend)
-assert(not VGSChatMenu:IsShown() and ns.ResolveNode(ns.GetMenu(), "DEFAULT").X.A.Y.text == nil)
+assert(not PADChatMenu:IsShown() and ns.ResolveNode(ns.GetMenu(), "DEFAULT").X.A.Y.text == nil)
 Pad("LeftButton"); Pad("X"); Pad("A"); Pad("X")
 assert(sent[1] == "Farewell" and sent[2] == "SAY" and emotes[#emotes] == "WAVE")
 assert(not ns.IsAvailable({ text = "hi" }, "GROUP") and ns.IsAvailable({ emote = "WAVE" }, "GROUP"))
@@ -495,12 +499,12 @@ ns.ResetToDefaults(); assert(ns.DB.menu.X.variants.GROUP.A.A.emote == "OOM")
 -- combat; the secure paths stay unchanged and other BGs use generic calls.
 Group(nil, "RAID", "pvp"); subzone = "Blacksmith"; combat = true
 Pad("LeftButton")
-assert(table.concat(LeafLabels(VGSChatMenu), ","):find("AA - 2-3 inc BS,AX - 4-6 inc BS,AY - Big INC BS!", 1, true))
+assert(table.concat(LeafLabels(PADChatMenu), ","):find("AA - 2-3 inc BS,AX - 4-6 inc BS,AY - Big INC BS!", 1, true))
 Pad("A"); Pad("X"); assert(sent[1] == "4-6 inc BS" and sent[2] == "INSTANCE_CHAT")
 Pad("LeftButton"); Pad("A"); Pad("A"); assert(sent[1] == "2-3 inc BS")
 Pad("LeftButton"); Pad("A"); Pad("Y"); assert(sent[1] == "Big INC BS!")
 Pad("LeftButton"); Pad("A"); subzone = "Lumber Mill"; Event("ZONE_CHANGED")
-assert(VGSChatOpen:GetAttribute("path") == "A" and LeafLabels(VGSChatMenu)[1] == "AA - 2-3 inc LM")
+assert(PADChatOpen:GetAttribute("path") == "A" and LeafLabels(PADChatMenu)[1] == "AA - 2-3 inc LM")
 Pad("A"); assert(sent[1] == "2-3 inc LM")
 for zone, abbreviation in pairs({ ["Gold Mine"] = "GM", Stables = "ST", Farm = "Farm" }) do
 	subzone = zone; assert(ns.FormatMessage("Defend {location}!", "RAID") == "Defend " .. abbreviation .. "!")
@@ -511,7 +515,7 @@ assert(ns.FormatMessage("2-3 inc {location}", "RAID") == "2-3 inc here")
 instanceID = 529
 combat = false; Click(Button("Compact: Off"))
 Pad("LeftButton"); Pad("A")
-assert(Find(function(o) return o.kind == "Text" and o.parent.parent == VGSChatMenu and o.text == "2-3 inc BS" end))
+assert(Find(function(o) return o.kind == "Text" and o.parent.parent == PADChatMenu and o.text == "2-3 inc BS" end))
 Pad("B"); Click(Button("Compact: On"))
 Group(); voiceCount = #emotes
 ns.SendNode({ text = "Need mana.", emote = "OOM" }, "GROUP")
@@ -528,13 +532,13 @@ local legacyMenu = ns.CopyMenu(shippedDefaults)
 for _, key in ipairs(ns.CHOICES) do legacyMenu[key].variants = nil end
 legacyMenu.X.variants = { GROUP = { label = "My group", A = { label = "Custom", text = "Custom!" } }, RAID = false }
 legacyMenu.Y.A.text = "My help"
-VGSChatDB = { menu = legacyMenu, compact = true, version = 2 }; Event("ADDON_LOADED", "VGSChat")
+PADChatDB = { menu = legacyMenu, compact = true, version = 2 }; Event("ADDON_LOADED", "PADChat")
 assert(ns.DB.version == 5 and ns.DB.compact)
 assert(ns.DB.menu.X.variants.GROUP.A.text == "Custom!" and ns.DB.menu.X.variants.RAID == false)
 assert(ns.DB.menu.Y.A.text == "My help" and ns.DB.menu.Y.variants == nil)
 assert(ns.DB.menu.A.variants.RAID.A.text == "2-3 inc {location}")
 ns.DB.menu.A.variants.RAID.A.text = "Edited incoming"
-Event("ADDON_LOADED", "VGSChat"); assert(ns.DB.menu.A.variants.RAID.A.text == "Edited incoming")
+Event("ADDON_LOADED", "PADChat"); assert(ns.DB.menu.A.variants.RAID.A.text == "Edited incoming")
 assert(shippedDefaults.A.variants.RAID.A.text == "2-3 inc {location}")
 
 -- First-release Greet options (Wave was "/e waves.", later demoted to Say)
@@ -543,7 +547,7 @@ local oldGreet = ns.CopyMenu(shippedDefaults)
 oldGreet.X.A.A = { label = "Hello", text = "Well met!", chat = "SAY" }
 oldGreet.X.A.X = { label = "Goodbye", text = "See ya!", chat = "SAY" }
 oldGreet.X.A.Y = { label = "Wave", text = "waves.", chat = "SAY" }
-VGSChatDB = { menu = oldGreet, compact = false, version = 4 }; Event("ADDON_LOADED", "VGSChat")
+PADChatDB = { menu = oldGreet, compact = false, version = 4 }; Event("ADDON_LOADED", "PADChat")
 assert(ns.DB.version == 5 and ns.DB.menu.X.A.A.text == "Hello" and ns.DB.menu.X.A.X.text == "See ya!")
 assert(ns.DB.menu.X.A.Y.text == nil and ns.DB.menu.X.A.Y.emote == "WAVE" and ns.DB.menu.X.A.Y ~= shippedDefaults.X.A.Y)
 
@@ -553,10 +557,10 @@ ns.ResetToDefaults(); ns.DB.compact = false
 instanceID = 489; subzone = "Blacksmith"; Group(nil, "RAID", "pvp")
 local readsBeforeWarsong = subzoneReads
 combat = true; Pad("LeftButton")
-assert(VGSChatOpen:GetAttribute("menucontext") == "RAID" and VGSChatOpen:GetAttribute("menuprofile") == "WSG")
-assert(table.concat(LeafLabels(VGSChatMenu), ",") == "AA - Flag going ramp,AX - Flag going tunnel,AY - Flag going graveyard,XA - Escort our carrier,XX - Intercept enemy carrier,XY - Return our flag,YA - Regroup,YX - Need healing,YY - Need mana")
-Pad("LB"); assert(VGSChatOpen:GetAttribute("menucontext") == "GROUP")
-Pad("RB"); assert(LeafLabels(VGSChatMenu)[1] == "AA - Flag going ramp")
+assert(PADChatOpen:GetAttribute("menucontext") == "RAID" and PADChatOpen:GetAttribute("menuprofile") == "WSG")
+assert(table.concat(LeafLabels(PADChatMenu), ",") == "AA - Flag going ramp,AX - Flag going tunnel,AY - Flag going graveyard,XA - Escort our carrier,XX - Intercept enemy carrier,XY - Return our flag,YA - Regroup,YX - Need healing,YY - Need mana")
+Pad("LB"); assert(PADChatOpen:GetAttribute("menucontext") == "GROUP")
+Pad("RB"); assert(LeafLabels(PADChatMenu)[1] == "AA - Flag going ramp")
 Pad("B"); Released()
 for _, call in ipairs({
 	{ "AA", "Flag going ramp!" }, { "AX", "Flag going tunnel!" },
@@ -570,9 +574,9 @@ end
 assert(subzoneReads == readsBeforeWarsong, "Warsong calls must not read the player's subzone")
 combat = false; Event("PLAYER_ENTERING_WORLD"); Click(Button("Compact: Off"))
 Pad("LeftButton")
-assert(Find(function(o) return o.kind == "Text" and o.parent.parent == VGSChatMenu and o.text == "Flag route" end))
+assert(Find(function(o) return o.kind == "Text" and o.parent.parent == PADChatMenu and o.text == "Flag route" end))
 Pad("A")
-assert(Find(function(o) return o.kind == "Text" and o.parent.parent == VGSChatMenu and o.text == "Flag going tunnel" end))
+assert(Find(function(o) return o.kind == "Text" and o.parent.parent == PADChatMenu and o.text == "Flag going tunnel" end))
 Pad("X"); assert(sent[1] == "Flag going tunnel!")
 Click(Button("Compact: On"))
 
@@ -587,9 +591,9 @@ Pad("LeftButton"); Pad("A"); Pad("A"); assert(sent[1] == "Flag moving ramp!")
 assert(ns.DB.menu.A.variants.RAID.A.text == "2-3 inc {location}")
 Undo(); Select("AX"); Click(Button("Remove")); Click(Button("+ Group"))
 Select("AXA"); Click(Button("+ Message"))
-assert(VGSChatOpen:GetAttribute("node-WSG-AX") == "branch" and VGSChatOpen:GetAttribute("node-RAID-AX") == "leaf")
+assert(PADChatOpen:GetAttribute("node-WSG-AX") == "branch" and PADChatOpen:GetAttribute("node-RAID-AX") == "leaf")
 combat = true; Pad("LeftButton"); Pad("A"); Pad("X")
-assert(VGSChatOpen:GetAttribute("open") and VGSChatOpen:GetAttribute("path") == "AX")
+assert(PADChatOpen:GetAttribute("open") and PADChatOpen:GetAttribute("path") == "AX")
 Pad("A"); assert(sent[1] == "Hello!" and sent[2] == "INSTANCE_CHAT"); Released()
 combat = false; Undo(); Undo(); Undo()
 instanceID = 529; Event("ZONE_CHANGED_NEW_AREA")
@@ -604,33 +608,29 @@ versionThree.A.variants.RAID.battlegrounds = nil
 versionThree.X.variants.RAID.battlegrounds = nil
 versionThree.X.variants.RAID.A.text = "Custom defense."
 versionThree.Y.variants.GROUP = nil
-VGSChatDB = { menu = versionThree, compact = false, version = 3 }
-Event("ADDON_LOADED", "VGSChat")
+PADChatDB = { menu = versionThree, compact = false, version = 3 }
+Event("ADDON_LOADED", "PADChat")
 assert(ns.DB.version == 5 and ns.DB.menu.A.variants.RAID.battlegrounds[489].A.text == "Flag going ramp!")
 assert(ns.DB.menu.X.variants.RAID.A.text == "Custom defense." and ns.DB.menu.X.variants.RAID.battlegrounds == nil)
 assert(ns.DB.menu.Y.variants.GROUP == nil)
 ns.DB.menu.A.variants.RAID.battlegrounds[489].A.text = "Custom flag call!"
-ns.DB.version = 3; Event("ADDON_LOADED", "VGSChat")
+ns.DB.version = 3; Event("ADDON_LOADED", "PADChat")
 assert(ns.DB.menu.A.variants.RAID.battlegrounds[489].A.text == "Custom flag call!")
 assert(shippedDefaults.A.variants.RAID.battlegrounds[489].A.text == "Flag going ramp!")
 
--- /vgs toggles the editor.
-assert(SLASH_VGSCHAT1 == "/vgs")
-local wasShown = VGSChatEditor:IsShown()
-SlashCmdList.VGSCHAT(""); assert(VGSChatEditor:IsShown() ~= wasShown)
-SlashCmdList.VGSCHAT(""); assert(VGSChatEditor:IsShown() == wasShown)
+assert(next(SlashCmdList) == nil, "slash commands taint Forever's gamepad UI")
 
 -- The minimap button toggles the editor; dragging slides it round the map
 -- edge and saves the angle.
-local minimapButton = VGSChatMinimapButton
+local minimapButton = PADChatMinimapButton
 assert(minimapButton.parent == Minimap and minimapButton.point[2] == Minimap)
-wasShown = VGSChatEditor:IsShown()
-minimapButton.scripts.OnClick(minimapButton); assert(VGSChatEditor:IsShown() ~= wasShown)
-minimapButton.scripts.OnClick(minimapButton); assert(VGSChatEditor:IsShown() == wasShown)
+local wasShown = PADChatEditor:IsShown()
+minimapButton.scripts.OnClick(minimapButton); assert(PADChatEditor:IsShown() ~= wasShown)
+minimapButton.scripts.OnClick(minimapButton); assert(PADChatEditor:IsShown() == wasShown)
 minimapButton.scripts.OnDragStart(minimapButton)
 cursorX, cursorY = 800, 500; minimapButton.scripts.OnUpdate(minimapButton)
 minimapButton.scripts.OnDragStop(minimapButton)
 assert(ns.DB.minimapAngle == 90 and minimapButton.scripts.OnUpdate == nil)
 assert(math.abs(minimapButton.point[4]) < 1e-9 and minimapButton.point[5] == 104)
 
-print("Editor checks passed: /vgs, minimap button, Warsong CTF calls and editing, AB objectives, BG migrations, mana voice, smart tabs, binding cleanup, scrolling, inheritance, undo, and combat snapshots.")
+print("Editor checks passed: no slash commands, minimap button, Warsong CTF calls and editing, AB objectives, BG migrations, mana voice, smart tabs, binding cleanup, scrolling, inheritance, undo, and combat snapshots.")

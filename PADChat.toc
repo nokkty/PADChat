@@ -1,0 +1,11 @@
+## Interface: 16001
+## Title: PAD Chat
+## Notes: Tribes 2 style quick chat for gamepads. A/X/Y selects messages, LB/RB switches Say/Group tabs, B cancels.
+## Version: 0.2.0
+## SavedVariables: PADChatDB
+## IconTexture: Interface\Icons\Ability_Warrior_BattleShout
+
+Messages.lua
+PADChat.lua
+Editor.lua
+MinimapButton.lua

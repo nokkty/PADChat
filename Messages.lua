@@ -1,5 +1,5 @@
--- The default VGS menu shipped with the addon. Players edit their own copy in
--- the editor window (the "VGSEdit" macro or /vgs); this table seeds it on first run
+-- The default PAD Chat menu shipped with the addon. Players edit their own copy in
+-- the editor window (the "PADEdit" macro or minimap button); this table seeds it on first run
 -- and on "Reset to defaults".
 --
 -- Each level is keyed by the button that picks it: A, X or Y (B is always Cancel).

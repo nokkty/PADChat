@@ -1,6 +1,6 @@
--- VGS Chat: Tribes 2 Voice Game System style quick chat for WoW Forever gamepads.
+-- PAD Chat: Tribes 2 Voice Game System style quick chat for WoW Forever gamepads.
 --
--- The player presses the "VGSChat" macro (placed anywhere on their bars). Its
+-- The player presses the "PADChat" macro (placed anywhere on their bars). Its
 -- /click hits a SecureHandler button whose snippet takes over A/X/Y/B/LB/RB with
 -- priority override bindings, walks the menu one press at a time, and releases
 -- the buttons again when a message is chosen or B cancels. Binding changes have
@@ -10,17 +10,17 @@
 -- hook below runs right after it, inside the same button press (a hardware
 -- event, which /say needs outdoors), and sends the message.
 --
--- Never touches the chat edit box, which taints Forever's gamepad UI. The only
--- slash command is the editor's /vgs (Editor.lua), kept out of this file.
+-- Never touches the chat edit box or registers slash commands, which taint
+-- Forever's gamepad UI.
 
 local ADDON, ns = ...
 
-local MACRO_NAME = "VGSChat"
+local MACRO_NAME = "PADChat"
 -- Macros need a numeric icon file ID; a texture path is accepted but leaves
 -- the macro iconless, and the client then won't let it be placed on a bar.
 local MACRO_ICON = 132333 -- Ability_Warrior_BattleShout
 local MACRO_FALLBACK_ICON = 134400 -- INV_Misc_QuestionMark
-local MACRO_BODY = "/click VGSChatOpen LeftButton 1"
+local MACRO_BODY = "/click PADChatOpen LeftButton 1"
 
 -- Xbox naming; the PAD codes are the same on every controller.
 local KEYS = { A = "PAD1", B = "PAD2", X = "PAD3", Y = "PAD4", LB = "PADLSHOULDER", RB = "PADRSHOULDER" }
@@ -39,10 +39,13 @@ local function FormatPath(path, pressedCount)
 	return table.concat(colored)
 end
 
-local function Print(text) print("|cff33ff99VGS Chat|r: " .. text) end
+local function Print(text) print("|cff33ff99PAD Chat|r: " .. text) end
 
 ns.CHOICES, ns.KEY_COLOR, ns.Print = CHOICES, KEY_COLOR, Print
-ns.CONTEXTS = { "DEFAULT", "GROUP", "RAID" }
+-- Battlegrounds aren't in the WoW: Forever beta, so the Battleground tab and
+-- zone detection stay off until launch. Flip to true to re-enable them all.
+ns.BATTLEGROUNDS_ENABLED = ns.BATTLEGROUNDS_ENABLED or false
+ns.CONTEXTS = { "DEFAULT", "GROUP", ns.BATTLEGROUNDS_ENABLED and "RAID" or nil }
 -- Retain the saved RAID variant key for existing menus; it is now the BG tab.
 ns.CONTEXT_LABELS = { DEFAULT = "Say", GROUP = "Group", RAID = "Battleground" }
 ns.MAX_DEPTH = 4 -- presses per message, counting the last one
@@ -63,7 +66,7 @@ end
 local function HasText(node) return node.text ~= nil and node.text ~= "" end
 
 ------------------------------------------------------------------------
--- Saved menu. VGSChatDB.menu is the player's copy, seeded from
+-- Saved menu. PADChatDB.menu is the player's copy, seeded from
 -- ns.DefaultMenu (Messages.lua) on first run and by "Reset to defaults".
 ------------------------------------------------------------------------
 local function DeepCopy(t)
@@ -80,7 +83,7 @@ end
 
 function ns.IsBattleground()
 	local _, kind = IsInInstance()
-	return kind == "pvp"
+	return ns.BATTLEGROUNDS_ENABLED and kind == "pvp"
 end
 
 function ns.GetContext()
@@ -235,9 +238,10 @@ end
 ------------------------------------------------------------------------
 -- Secure open button (the state machine)
 ------------------------------------------------------------------------
-local open = CreateFrame("Button", "VGSChatOpen", UIParent, "SecureHandlerClickTemplate")
+local open = CreateFrame("Button", "PADChatOpen", UIParent, "SecureHandlerClickTemplate")
 open:RegisterForClicks("AnyDown")
 for key, binding in pairs(KEYS) do open:SetAttribute("key-" .. key, binding) end
+open:SetAttribute("battlegrounds", ns.BATTLEGROUNDS_ENABLED)
 
 -- LeftButton = the macro (toggle); A/X/Y/B/LB/RB = override-bound pad buttons,
 -- which click this same button with the letter as the mouse button.
@@ -258,7 +262,7 @@ open:SetAttribute("_onclick", [[
 			for modifier in ("NONE SHIFT- CTRL- ALT- CTRL-SHIFT- ALT-SHIFT- ALT-CTRL- ALT-CTRL-SHIFT-"):gmatch("%S+") do
 				local prefix = modifier == "NONE" and "" or modifier
 				for key in ("A X Y B LB RB"):gmatch("%S+") do
-					self:SetBindingClick(true, prefix .. self:GetAttribute("key-" .. key), "VGSChatOpen", key)
+					self:SetBindingClick(true, prefix .. self:GetAttribute("key-" .. key), "PADChatOpen", key)
 				end
 			end
 		end
@@ -272,6 +276,9 @@ open:SetAttribute("_onclick", [[
 			context = context == "DEFAULT" and "GROUP" or context == "GROUP" and "RAID" or "DEFAULT"
 		else
 			context = context == "DEFAULT" and "RAID" or context == "RAID" and "GROUP" or "DEFAULT"
+		end
+		if context == "RAID" and not self:GetAttribute("battlegrounds") then
+			context = button == "RB" and "DEFAULT" or "GROUP"
 		end
 		self:SetAttribute("menucontext", context)
 		self:SetAttribute("path", "")
@@ -578,7 +585,7 @@ function ns.CreateMenuView(parent, name)
 	return menu
 end
 
-local menu = ns.CreateMenuView(UIParent, "VGSChatMenu")
+local menu = ns.CreateMenuView(UIParent, "PADChatMenu")
 menu:SetPoint("LEFT", UIParent, "LEFT", 40, 80)
 menu:SetFrameStrata("HIGH")
 menu:SetClampedToScreen(true)
@@ -611,9 +618,9 @@ end)
 -- Two account macros: one opens the quick chat menu, one opens the editor.
 local MACROS = {
 	{ name = MACRO_NAME, body = MACRO_BODY, icon = MACRO_ICON,
-		hint = "|cffffd100VGSChat|r (opens the quick chat menu)" },
-	{ name = "VGSEdit", body = "/click VGSChatEditorToggle", icon = MACRO_FALLBACK_ICON,
-		hint = "|cffffd100VGSEdit|r (opens the menu editor)" },
+		hint = "|cffffd100PADChat|r (opens the quick chat menu)" },
+	{ name = "PADEdit", body = "/click PADChatEditorToggle", icon = MACRO_FALLBACK_ICON,
+		hint = "|cffffd100PADEdit|r (opens the menu editor)" },
 }
 
 local function EnsureOneMacro(m)
@@ -639,8 +646,15 @@ local function EnsureOneMacro(m)
 	return true
 end
 
+-- Pre-rename macros whose /click targets no longer exist.
+local OLD_MACROS = { "VGSChat", "VGSEdit" }
+
 local function EnsureMacro()
 	if InCombatLockdown() then return false end
+	for _, name in ipairs(OLD_MACROS) do
+		local index = GetMacroIndexByName(name)
+		if index and index > 0 then DeleteMacro(index); Print("Removed the old " .. name .. " macro.") end
+	end
 	for _, m in ipairs(MACROS) do EnsureOneMacro(m) end
 	return true
 end
@@ -664,9 +678,9 @@ events:SetScript("OnEvent", function(_, event, arg1)
 		if arg1 ~= ADDON then return end
 		-- Whether the client handed back saved settings; the editor shows it so
 		-- a return of the beta's "SavedVariables never load" bug is visible.
-		ns.savedLoaded = type(VGSChatDB) == "table" and type(VGSChatDB.menu) == "table"
-		if type(VGSChatDB) ~= "table" then VGSChatDB = {} end
-		ns.DB = VGSChatDB
+		ns.savedLoaded = type(PADChatDB) == "table" and type(PADChatDB.menu) == "table"
+		if type(PADChatDB) ~= "table" then PADChatDB = {} end
+		ns.DB = PADChatDB
 		if type(ns.DB.compact) ~= "boolean" then ns.DB.compact = false end
 		if type(ns.DB.menu) ~= "table" then ns.DB.menu = DeepCopy(ns.DefaultMenu) end
 		local version = tonumber(ns.DB.version) or 0
