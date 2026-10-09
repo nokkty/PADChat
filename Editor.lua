@@ -1,12 +1,13 @@
--- Tree-and-details editor, opened by the VGSEdit macro.
--- Custom controls only: no Blizzard widget templates, slash commands, or
--- UISpecialFrames (the latter two taint Forever's gamepad chat focus stack).
+-- Tree-and-details editor, opened by the VGSEdit macro or /vgs.
+-- Custom controls only: no Blizzard widget templates or UISpecialFrames (the
+-- latter taints Forever's gamepad chat focus stack). /vgs is a deliberate
+-- exception for keyboard players, though slash commands may taint it too.
 local _, ns = ...
 local WIDTH, HEIGHT, SPLIT = 760, 650, 350
 local selected, expanded = "A", { X = true, XA = true }
 local context = "DEFAULT"
 local history, typingField = {}, nil
-local Refresh, nameBox, textBox, detail, move, confirm
+local Refresh, nameBox, textBox, detail, move, confirm, emotePanel, emoteField, DrawEmotes
 
 -- Return the saved slot, following the selected condition through its parents.
 -- Ownership prevents edits to inherited nodes from changing the default menu.
@@ -18,7 +19,7 @@ local function Slot(path)
 		node, condition = ns.PickNode(node[path:sub(i, i)], context)
 		node = ns.GetBattlegroundNode(node, context)
 		owned = condition == context or owned and condition == nil
-		if not node or node.text ~= nil then return nil end
+		if not node or ns.IsMessage(node) then return nil end
 	end
 	return node, path:sub(-1), owned
 end
@@ -46,13 +47,10 @@ local function Put(path, node)
 		raw.variants[context] = node or false
 	end
 end
-local function IsGroup(node) return type(node) == "table" and node.text == nil end
-local function Name(node)
-	return node and ((node.label ~= "" and node.label) or node.text or "Group") or "Empty slot"
-end
+local function IsGroup(node) return type(node) == "table" and not ns.IsMessage(node) end
 local function Breadcrumb(path)
 	local parts = { "Top" }
-	for i = 1, #path do parts[#parts + 1] = Name(At(path:sub(1, i))) end
+	for i = 1, #path do parts[#parts + 1] = ns.NodeLabel(At(path:sub(1, i))) end
 	return table.concat(parts, " / ")
 end
 local function Sequence(path) return (path:gsub(".", "%0 > ")):gsub(" > $", "") end
@@ -70,6 +68,7 @@ local function Select(path)
 	if nameBox then nameBox:ClearFocus(); textBox:ClearFocus() end
 	if detail then detail:ScrollTo(0) end
 	typingField, selected = nil, path
+	if emotePanel then emotePanel:Hide() end
 	for i = 1, #path - 1 do expanded[path:sub(1, i)] = true end
 	Refresh()
 end
@@ -181,7 +180,7 @@ local undo = Button(header, "Undo", WIDTH - 160, -16, 66, function()
 	local previous = table.remove(history)
 	if not previous then return end
 	nameBox:ClearFocus(); textBox:ClearFocus(); typingField = nil
-	move:Hide(); confirm:Hide()
+	move:Hide(); confirm:Hide(); emotePanel:Hide()
 	ns.DB.menu, selected, expanded = previous.menu, previous.selected, previous.expanded
 	context = previous.context
 	Changed()
@@ -202,7 +201,7 @@ mappingCaption:SetTextColor(0.7, 0.68, 0.63)
 local mappings = {}
 for i, condition in ipairs(ns.CONTEXTS) do
 	mappings[condition] = Button(editor, ns.CONTEXT_LABELS[condition], 16 + (i - 1) * 110, -94, 104, function()
-		nameBox:ClearFocus(); textBox:ClearFocus(); move:Hide(); confirm:Hide()
+		nameBox:ClearFocus(); textBox:ClearFocus(); move:Hide(); confirm:Hide(); emotePanel:Hide()
 		typingField, context = nil, condition; detail:ScrollTo(0); Refresh()
 	end)
 end
@@ -279,7 +278,7 @@ end)
 confirmApply.label:SetTextColor(1, 0.4, 0.4)
 local function Ask(title, message, label, action)
 	nameBox:ClearFocus(); textBox:ClearFocus()
-	if move then move:Hide() end
+	if move then move:Hide(); emotePanel:Hide() end
 	confirmTitle:SetText(title); confirmText:SetText(message); confirmApply.label:SetText(label)
 	confirmAction = action; confirm:Show()
 end
@@ -348,7 +347,7 @@ DrawDestinations = function()
 			destinationRows[i] = row
 		end
 		row.path = path; row.name:SetText(Breadcrumb(path:sub(1, -2)))
-		row.description:SetText("|c" .. ns.KEY_COLOR[path:sub(-1)] .. Sequence(path) .. "|r  ·  " .. (At(path) and "Swap with " .. Name(At(path)) or "Empty slot"))
+		row.description:SetText("|c" .. ns.KEY_COLOR[path:sub(-1)] .. Sequence(path) .. "|r  ·  " .. (At(path) and "Swap with " .. ns.NodeLabel(At(path)) or "Empty slot"))
 		row.bg:SetColorTexture(path == destination and 0.22 or 0.16, path == destination and 0.2 or 0.16, path == destination and 0.15 or 0.17, 1)
 		row:Show()
 	end
@@ -360,9 +359,9 @@ DrawDestinations = function()
 end
 local moveButton = Button(form, "Move / swap...", 0, -264, 122, function()
 	nameBox:ClearFocus(); textBox:ClearFocus()
-	confirm:Hide()
+	confirm:Hide(); emotePanel:Hide()
 	moveSource, destination = selected, nil; destinations:ScrollTo(0)
-	moveTitle:SetText("Move " .. Name(At(selected))); DrawDestinations(); move:Show()
+	moveTitle:SetText("Move " .. ns.NodeLabel(At(selected))); DrawDestinations(); move:Show()
 end)
 local remove = Button(form, "Remove", 132, -264, 80, function()
 	local path = selected
@@ -372,18 +371,98 @@ local remove = Button(form, "Remove", 132, -264, 80, function()
 		Remember(); Put(path, nil); Changed()
 	end
 	if IsGroup(node) then
-		Ask("Remove " .. Name(node) .. "?", "This removes the group and every option inside it. Undo restores the whole group.", "Remove group", Delete)
+		Ask("Remove " .. ns.NodeLabel(node) .. "?", "This removes the group and every option inside it. Undo restores the whole group.", "Remove group", Delete)
 	else Delete() end
 end)
 remove.label:SetTextColor(1, 0.4, 0.4)
 local sendNow = Button(form, "Send now", 222, -264, 90, function() ns.SendNode(At(selected), context) end)
-local manaVoice = Button(form, "", 0, -232, 160, function()
+
+-- Emote picker: a scrollable list of common emotes plus a token box for the
+-- rest. An emote fires along with the text, or alone when the message has none
+-- (the shipped "Wave" option is emote-only).
+local EMOTES = {
+	{ name = "No emote" },
+	{ name = "Wave", token = "WAVE" },
+	{ name = "Hello", token = "HELLO" },
+	{ name = "Goodbye", token = "BYE" },
+	{ name = "Thanks", token = "THANK" },
+	{ name = "Cheer", token = "CHEER" },
+	{ name = "Applaud", token = "APPLAUD" },
+	{ name = "Congratulate", token = "CONGRATULATE" },
+	{ name = "Bow", token = "BOW" },
+	{ name = "Salute", token = "SALUTE" },
+	{ name = "Dance", token = "DANCE" },
+	{ name = "Laugh", token = "LAUGH" },
+	{ name = "Joke", token = "JOKE" },
+	{ name = "Silly", token = "SILLY" },
+	{ name = "Point", token = "POINT" },
+	{ name = "Roar", token = "ROAR" },
+	{ name = "Agree", token = "AGREE" },
+	{ name = "Sigh", token = "SIGH" },
+	{ name = "Out of mana", token = "OOM" },
+}
+local EMOTE_NAMES = {}
+for _, emote in ipairs(EMOTES) do
+	if emote.token then EMOTE_NAMES[emote.token] = emote.name end
+end
+
+local emoteButton = Button(form, "", 0, -232, 160, function()
 	local node, owned = At(selected)
-	if not owned or not node or node.text == nil then return end
-	Remember()
-	if node.emote == "OOM" then node.emote = nil else node.emote = "OOM" end
-	Changed()
+	if not (owned and ns.IsMessage(node)) then return end
+	nameBox:ClearFocus(); textBox:ClearFocus(); emoteField:ClearFocus()
+	move:Hide(); confirm:Hide(); emotePanel:Show(); DrawEmotes()
 end)
+
+emotePanel = CreateFrame("Frame", nil, editor)
+emotePanel:SetSize(WIDTH - SPLIT - 20, HEIGHT - 124); emotePanel:SetPoint("TOPLEFT", SPLIT + 10, -66)
+emotePanel:SetFrameLevel(editor:GetFrameLevel() + 20); emotePanel:EnableMouse(true)
+Surface(emotePanel, 0.12, 0.12, 0.13); emotePanel:Hide()
+Text(emotePanel, "GameFontHighlightLarge", 14, -14, emotePanel:GetWidth() - 28, "Emote")
+local emoteHint = Text(emotePanel, "GameFontHighlightSmall", 14, -44, emotePanel:GetWidth() - 28, "Plays with the message, or alone when Message is empty.")
+emoteHint:SetTextColor(0.7, 0.68, 0.63)
+local emoteList = Scroll(emotePanel, 10, -66, emotePanel:GetWidth() - 20, emotePanel:GetHeight() - 224)
+local emoteRows = {}
+local emoteTokenLabel = Text(emotePanel, "GameFontHighlightSmall", 14, -emotePanel:GetHeight() + 150, emotePanel:GetWidth() - 28, "Custom emote token, for example KISS")
+emoteTokenLabel:SetTextColor(0.7, 0.68, 0.63)
+emoteField = CreateFrame("EditBox", nil, emotePanel)
+emoteField:SetSize(emotePanel:GetWidth() - 28, 28); emoteField:SetPoint("TOPLEFT", 14, -emotePanel:GetHeight() + 132)
+emoteField:SetAutoFocus(false); emoteField:SetMaxLetters(24); emoteField:SetFontObject("GameFontHighlight")
+emoteField:SetTextInsets(9, 9, 0, 0); Surface(emoteField, 0.055, 0.055, 0.065)
+emoteField:SetScript("OnTextChanged", function(self, userInput)
+	local node, owned = At(selected)
+	if not (userInput and owned and ns.IsMessage(node)) then return end
+	Remember(self)
+	local token = self:GetText():gsub("%s", ""):upper()
+	node.emote = token ~= "" and token or nil
+	Changed(true); DrawEmotes()
+end)
+emoteField:SetScript("OnEditFocusLost", function() typingField = nil end)
+emoteField:SetScript("OnEnterPressed", emoteField.ClearFocus); emoteField:SetScript("OnEscapePressed", emoteField.ClearFocus)
+local function SetEmote(token)
+	local node, owned = At(selected)
+	if not (owned and ns.IsMessage(node)) then return end
+	Remember(); node.emote = token; Changed(); DrawEmotes()
+end
+DrawEmotes = function()
+	local node = At(selected)
+	local current = node and ns.IsMessage(node) and node.emote or nil
+	for i, emote in ipairs(EMOTES) do
+		local row = emoteRows[i]
+		if not row then
+			row = Button(emoteList.content, "", 0, -(i - 1) * 34, emoteList.content:GetWidth(), function(self) SetEmote(self.token) end)
+			emoteRows[i] = row
+		end
+		row.token = emote.token
+		row.label:SetText(emote.token and emote.name .. "  ·  /" .. emote.token:lower() or emote.name)
+		local active = current == emote.token
+		row.bg:SetColorTexture(active and 0.22 or 0.16, active and 0.2 or 0.16, active and 0.15 or 0.17, 1)
+		row:Show()
+	end
+	emoteList:ContentHeight(#EMOTES * 34 + 4)
+	emoteField:SetText(current or "")
+end
+Button(emotePanel, "Close", 14, -emotePanel:GetHeight() + 40, 82, function() emotePanel:Hide() end)
+
 local groupHint = Text(form, "GameFontHighlightSmall", 0, -184, form:GetWidth(), "Expand the group in the tree to edit its options.")
 groupHint:SetTextColor(0.7, 0.68, 0.63); groupHint:SetWordWrap(true)
 local previewCaption = Text(form, "GameFontHighlightSmall", 0, -316, form:GetWidth(), "HUD preview")
@@ -416,7 +495,7 @@ local function DrawTree()
 			hover:SetAllPoints(); hover:SetColorTexture(1, 1, 1, 0.05)
 			row.expand = Button(row, ">", 0, -2, 22, function(self)
 				local p = self:GetParent().path
-				move:Hide(); confirm:Hide()
+				move:Hide(); confirm:Hide(); emotePanel:Hide()
 				expanded[p] = not expanded[p]
 				if not expanded[p] and selected:sub(1, #p) == p then Select(p) else Refresh() end
 			end)
@@ -430,7 +509,7 @@ local function DrawTree()
 			row.label = Text(row, "GameFontHighlight", 58, -9, 160)
 			row.kind = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 			row.kind:SetPoint("RIGHT", -6, 0); row.kind:SetTextColor(0.7, 0.68, 0.63)
-			row:SetScript("OnClick", function(self) move:Hide(); confirm:Hide(); Select(self.path) end)
+			row:SetScript("OnClick", function(self) move:Hide(); confirm:Hide(); emotePanel:Hide(); Select(self.path) end)
 			rows[i] = row
 		end
 		local node, indent = At(path), (#path - 1) * 14
@@ -440,7 +519,7 @@ local function DrawTree()
 		row.expand:SetShown(IsGroup(node)); row.expand.label:SetText(expanded[path] and "v" or ">")
 		for key, badge in pairs(row.badges) do badge:SetShown(key == path:sub(-1)); badge:SetAlpha(node and 1 or 0.4) end
 		row.label:SetWidth(row:GetWidth() - 104)
-		row.label:SetText(node and Name(node) or "+ Add option")
+		row.label:SetText(node and ns.NodeLabel(node) or "+ Add option")
 		row.label:SetTextColor(path == selected and 0.89 or (node and 0.94 or 0.6), path == selected and 0.77 or (node and 0.92 or 0.6), path == selected and 0.48 or (node and 0.89 or 0.6))
 		local _, owned = At(path)
 		row.kind:SetText(context ~= "DEFAULT" and owned and "Custom" or (IsGroup(node) and "Group" or ""))
@@ -454,7 +533,7 @@ Refresh = function(textOnly)
 	compact.label:SetText(ns.DB.compact and "Compact: On" or "Compact: Off")
 	while #selected > 1 and not IsGroup(At(selected:sub(1, -2))) do selected = selected:sub(1, -2) end
 	local node, owned = At(selected)
-	local message, group = node and node.text ~= nil, IsGroup(node)
+	local message, group = node and ns.IsMessage(node), IsGroup(node)
 	mappingCaption:SetText("Edit tab  ·  Active: " .. ns.CONTEXT_LABELS[ns.GetContext()])
 	for condition, button in pairs(mappings) do
 		local active = condition == context
@@ -468,7 +547,7 @@ Refresh = function(textOnly)
 	inherit:SetEnabled(context ~= "DEFAULT" and raw and raw.variants and raw.variants[context] ~= nil or false)
 	mappingHint:SetText(context == "DEFAULT" and "Say tab · other tabs inherit these options" or (owned and "Custom tab · editing this branch" or "Inherited · customize to make changes"))
 	DrawTree(); undo:SetEnabled(#history > 0)
-	formTitle:SetText("|c" .. ns.KEY_COLOR[selected:sub(-1)] .. selected:sub(-1) .. "|r  " .. (node and Name(node) or "Add an option"))
+	formTitle:SetText("|c" .. ns.KEY_COLOR[selected:sub(-1)] .. selected:sub(-1) .. "|r  " .. (node and ns.NodeLabel(node) or "Add an option"))
 	-- Keep long labels in their field; avoid a heading growing into the controls.
 	formTitle:SetWordWrap(false)
 	formPath:SetText(Breadcrumb(selected:sub(1, -2)))
@@ -480,9 +559,9 @@ Refresh = function(textOnly)
 	emptyHint:SetShown(node == nil); addMessage:SetShown(node == nil); addGroup:SetShown(node == nil)
 	addMessage:SetEnabled(owned); addGroup:SetEnabled(owned and #selected < ns.MAX_DEPTH); groupHint:SetShown(group)
 	moveButton:SetShown(node ~= nil); remove:SetShown(node ~= nil); sendNow:SetShown(message)
-	moveButton:SetEnabled(owned); remove:SetEnabled(owned); sendNow:SetEnabled(message and ns.ChannelAvailable(context) or false)
-	manaVoice:SetShown(message); manaVoice:SetEnabled(owned)
-	manaVoice.label:SetText(node and node.emote == "OOM" and "Mana voice: On" or "Mana voice: Off")
+	moveButton:SetEnabled(owned); remove:SetEnabled(owned); 	sendNow:SetEnabled(ns.IsAvailable(node, context))
+	emoteButton:SetShown(message); emoteButton:SetEnabled(owned)
+	emoteButton.label:SetText("Emote: " .. (node and node.emote and (EMOTE_NAMES[node.emote] or node.emote) or "Off"))
 	local actionY = message and -196 or -136
 	moveButton:SetPoint("TOPLEFT", 0, actionY); remove:SetPoint("TOPLEFT", 132, actionY)
 	sendNow:SetPoint("TOPLEFT", 222, actionY)
@@ -491,7 +570,7 @@ Refresh = function(textOnly)
 	previewArea:SetPoint("TOPLEFT", 0, -previewY)
 	local parent = group and selected or selected:sub(1, -2)
 	previewCaption:SetText("HUD preview · " .. ns.CONTEXT_LABELS[context])
-	preview:Display(ns.ResolveNode(At(parent), context), parent == "" and "Quick Chat" or Name(At(parent)), parent, context)
+	preview:Display(ns.ResolveNode(At(parent), context), parent == "" and "Quick Chat" or ns.NodeLabel(At(parent)), parent, context)
 	-- Fit wrapped HUD labels too, keeping the right side free of scrolling.
 	local previewScale = math.min(1, (detail:GetHeight() - previewY - 10) / preview:GetHeight())
 	preview:SetScale(previewScale)
@@ -506,13 +585,18 @@ end
 
 local toggle = CreateFrame("Button", "VGSChatEditorToggle", UIParent)
 toggle:RegisterForClicks("AnyUp", "AnyDown")
-toggle:SetScript("OnClick", function() editor:SetShown(not editor:IsShown()) end)
+-- VGSEdit, /vgs and the minimap button all open the editor through this.
+function ns.ToggleEditor() editor:SetShown(not editor:IsShown()) end
+toggle:SetScript("OnClick", ns.ToggleEditor)
+-- /vgs toggles the editor for keyboard players; gamepad players use VGSEdit.
+SLASH_VGSCHAT1 = "/vgs"
+SlashCmdList.VGSCHAT = ns.ToggleEditor
 editor:SetScript("OnShow", function()
 	editor:SetScale(math.min(1, (UIParent:GetWidth() - 32) / WIDTH, (UIParent:GetHeight() - 32) / HEIGHT))
 	Refresh()
 end)
 editor:SetScript("OnHide", function()
-	nameBox:ClearFocus(); textBox:ClearFocus(); move:Hide(); confirm:Hide()
+	nameBox:ClearFocus(); textBox:ClearFocus(); move:Hide(); confirm:Hide(); emotePanel:Hide()
 end)
 -- Also clears a deferred status once the secure menu receives the new snapshot.
 local watcher = CreateFrame("Frame")

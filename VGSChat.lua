@@ -10,8 +10,8 @@
 -- hook below runs right after it, inside the same button press (a hardware
 -- event, which /say needs outdoors), and sends the message.
 --
--- Never touches the chat edit box and registers no slash commands: both taint
--- Forever's gamepad UI.
+-- Never touches the chat edit box, which taints Forever's gamepad UI. The only
+-- slash command is the editor's /vgs (Editor.lua), kept out of this file.
 
 local ADDON, ns = ...
 
@@ -26,6 +26,18 @@ local MACRO_BODY = "/click VGSChatOpen LeftButton 1"
 local KEYS = { A = "PAD1", B = "PAD2", X = "PAD3", Y = "PAD4", LB = "PADLSHOULDER", RB = "PADRSHOULDER" }
 local CHOICES = { "A", "X", "Y" }
 local KEY_COLOR = { A = "ff60d060", X = "ff4aa3ff", Y = "ffffd100", B = "ffff5050" }
+local PRESSED_KEY_COLOR = "ff9d9d9d"
+
+-- Paints a button path. The first `pressedCount` keys are the ones already
+-- pressed, so they grey out and the remaining presses keep their colour.
+local function FormatPath(path, pressedCount)
+	local colored = {}
+	for i = 1, #path do
+		local key = path:sub(i, i)
+		colored[i] = "|c" .. (i <= pressedCount and PRESSED_KEY_COLOR or KEY_COLOR[key]) .. key .. "|r"
+	end
+	return table.concat(colored)
+end
 
 local function Print(text) print("|cff33ff99VGS Chat|r: " .. text) end
 
@@ -34,6 +46,21 @@ ns.CONTEXTS = { "DEFAULT", "GROUP", "RAID" }
 -- Retain the saved RAID variant key for existing menus; it is now the BG tab.
 ns.CONTEXT_LABELS = { DEFAULT = "Say", GROUP = "Group", RAID = "Battleground" }
 ns.MAX_DEPTH = 4 -- presses per message, counting the last one
+
+-- A node is a message (a leaf the player can pick) when it sends chat text, an
+-- emote, or both. A node with neither opens one more level of options.
+function ns.IsMessage(node)
+	return type(node) == "table" and (node.text ~= nil or node.emote ~= nil)
+end
+
+-- Display name: the menu label, falling back to the text or the emote token.
+function ns.NodeLabel(node)
+	if not node then return "Empty slot" end
+	if node.label and node.label ~= "" then return node.label end
+	return node.text or node.emote or "Group"
+end
+
+local function HasText(node) return node.text ~= nil and node.text ~= "" end
 
 ------------------------------------------------------------------------
 -- Saved menu. VGSChatDB.menu is the player's copy, seeded from
@@ -102,7 +129,7 @@ function ns.ResolveNode(node, context, instanceID)
 	node = ns.GetBattlegroundNode(node, context, instanceID)
 	if not node then return nil end
 	local result = { label = node.label, text = node.text, chat = node.chat, emote = node.emote }
-	if node.text == nil then
+	if not ns.IsMessage(node) then
 		for _, key in ipairs(CHOICES) do result[key] = ns.ResolveNode(node[key], context, instanceID) end
 	end
 	return result
@@ -110,6 +137,12 @@ end
 
 function ns.ChannelAvailable(context)
 	return ns.GetChannel(context) ~= nil
+end
+
+-- Emote-only messages work anywhere; a message that sends text needs its channel.
+function ns.IsAvailable(node, context)
+	if not ns.IsMessage(node) then return false end
+	return node.emote ~= nil or HasText(node) and ns.ChannelAvailable(context)
 end
 
 -- Group follows the player's current party/raid. Instance chat takes priority
@@ -168,6 +201,21 @@ function ns.UpgradeDefaults(menu, includeMissing)
 	end
 end
 
+-- The first release sent Wave as "/e waves.", which MigrateMenu later turned
+-- into said text. Unedited Greet options take the shipped ones, so Wave plays
+-- the emote and Goodbye waves too.
+local OLD_GREETINGS = { A = { "Hello", "Well met!" }, X = { "Goodbye", "Farewell!" }, Y = { "Wave", "waves." } }
+function ns.UpgradeGreetings(menu)
+	local greet = menu.X and menu.X.A
+	if type(greet) ~= "table" then return end
+	for key, old in pairs(OLD_GREETINGS) do
+		local node = greet[key]
+		if type(node) == "table" and node.label == old[1] and node.text == old[2] and node.emote == nil and not node.variants then
+			greet[key] = DeepCopy(ns.DefaultMenu.X.A[key])
+		end
+	end
+end
+
 local activeMenus = {}
 for _, context in ipairs(ns.CONTEXTS) do activeMenus[context] = ns.ResolveNode(ns.DefaultMenu, context, 0) end
 activeMenus.WSG = ns.ResolveNode(ns.DefaultMenu, "RAID", 489)
@@ -207,8 +255,8 @@ open:SetAttribute("_onclick", [[
 			self:SetAttribute("menucontext", context == "WSG" and "RAID" or context)
 			self:SetAttribute("menuprofile", context == "WSG" and "WSG" or "DEFAULT")
 			self:SetAttribute("path", "")
-			for prefix in ("NONE SHIFT- CTRL- ALT- CTRL-SHIFT- ALT-SHIFT- ALT-CTRL- ALT-CTRL-SHIFT-"):gmatch("%S+") do
-				if prefix == "NONE" then prefix = "" end
+			for modifier in ("NONE SHIFT- CTRL- ALT- CTRL-SHIFT- ALT-SHIFT- ALT-CTRL- ALT-CTRL-SHIFT-"):gmatch("%S+") do
+				local prefix = modifier == "NONE" and "" or modifier
 				for key in ("A X Y B LB RB"):gmatch("%S+") do
 					self:SetBindingClick(true, prefix .. self:GetAttribute("key-" .. key), "VGSChatOpen", key)
 				end
@@ -286,9 +334,10 @@ local function PublishMenu()
 			if child then
 				local childPath = path .. key
 				local attributePath = context .. "-" .. childPath
-				open:SetAttribute("node-" .. attributePath, child.text and "leaf" or "branch")
+				local leaf = ns.IsMessage(child)
+				open:SetAttribute("node-" .. attributePath, leaf and "leaf" or "branch")
 				publishedPaths[attributePath] = true
-				if not child.text then Walk(child, childPath, context) end
+				if not leaf then Walk(child, childPath, context) end
 			end
 		end
 	end
@@ -321,15 +370,17 @@ end
 local lastSeq = 0
 
 local function SendNode(node, context)
-	if not (node and node.text and node.text ~= "") then return end
-	local chatType = ns.GetChannel(context)
-	if not chatType then
-		Print("Join a " .. (context == "RAID" and "battleground" or "group") .. " to send this message.")
-		return
+	if not (node and ns.IsMessage(node)) then return end
+	if HasText(node) then
+		local chatType = ns.GetChannel(context)
+		if not chatType then
+			Print("Join a " .. (context == "RAID" and "battleground" or "group") .. " to send this message.")
+			return
+		end
+		local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
+		local ok, err = pcall(send, ns.FormatMessage(node.text, context), chatType)
+		if not ok then Print("|cffff5050Couldn't send:|r " .. tostring(err)); return end
 	end
-	local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
-	local ok, err = pcall(send, ns.FormatMessage(node.text, context), chatType)
-	if not ok then Print("|cffff5050Couldn't send:|r " .. tostring(err)); return end
 	if node.emote then
 		local emoteOK, emoteError = pcall(DoEmote, node.emote)
 		if not emoteOK then Print("|cffff5050Couldn't play emote:|r " .. tostring(emoteError)) end
@@ -475,11 +526,11 @@ function ns.CreateMenuView(parent, name)
 			for _, key in ipairs(CHOICES) do
 				local child = node[key]
 				local row = rows[key]
-				row.label:SetText(child and ns.FormatMessage((child.label ~= "" and child.label) or child.text or "?", context) or "—")
-				local available = child and ns.ChannelAvailable(context)
+				row.label:SetText(child and ns.FormatMessage(ns.NodeLabel(child), context) or "—")
+				local available = ns.IsAvailable(child, context)
 				row.label:SetTextColor(available and 0.94 or 0.5, available and 0.92 or 0.5, available and 0.89 or 0.5)
 				row.badge:SetAlpha(available and 1 or 0.35)
-				row.arrow:SetShown(child ~= nil and not child.text)
+				row.arrow:SetShown(child ~= nil and not ns.IsMessage(child))
 				local height = math.max(30, row.label:GetStringHeight() + 12)
 				row:SetHeight(height)
 				row:SetPoint("TOPLEFT", 14, -y)
@@ -492,7 +543,7 @@ function ns.CreateMenuView(parent, name)
 					local child = branch[key]
 					if child then
 						local childPath = prefix .. key
-						if child.text ~= nil then
+						if ns.IsMessage(child) then
 							count = count + 1
 							local label = leaves[count]
 							if not label then
@@ -500,9 +551,9 @@ function ns.CreateMenuView(parent, name)
 								label:SetWidth(232); label:SetJustifyH("LEFT"); label:SetWordWrap(true)
 								leaves[count] = label
 							end
-							local available = ns.ChannelAvailable(context)
-							local buttons = available and childPath:gsub(".", function(k) return "|c" .. KEY_COLOR[k] .. k .. "|r" end) or childPath
-							label:SetText(buttons .. " - " .. ns.FormatMessage((child.label ~= "" and child.label) or child.text, context))
+							local available = ns.IsAvailable(child, context)
+							local buttons = available and FormatPath(childPath, #path) or childPath
+							label:SetText(buttons .. " - " .. ns.FormatMessage(ns.NodeLabel(child), context))
 							label:SetTextColor(available and 0.94 or 0.5, available and 0.92 or 0.5, available and 0.89 or 0.5)
 							label:SetPoint("TOPLEFT", 0, -height - 4); label:Show()
 							height = height + math.max(26, label:GetStringHeight() + 8)
@@ -620,8 +671,9 @@ events:SetScript("OnEvent", function(_, event, arg1)
 		if type(ns.DB.menu) ~= "table" then ns.DB.menu = DeepCopy(ns.DefaultMenu) end
 		local version = tonumber(ns.DB.version) or 0
 		if version < 4 then ns.UpgradeDefaults(ns.DB.menu, version < 3) end
+		if version < 5 then ns.UpgradeGreetings(ns.DB.menu) end
 		ns.MigrateMenu(ns.DB.menu)
-		ns.DB.version = 4
+		ns.DB.version = 5
 	end
 	UpdateContextDriver()
 	PublishMenu()

@@ -1,5 +1,5 @@
 -- The default VGS menu shipped with the addon. Players edit their own copy in
--- the editor window (the "VGSEdit" macro); this table seeds it on first run
+-- the editor window (the "VGSEdit" macro or /vgs); this table seeds it on first run
 -- and on "Reset to defaults".
 --
 -- Each level is keyed by the button that picks it: A, X or Y (B is always Cancel).
@@ -10,7 +10,8 @@
 -- The selected Say, Group or Battleground tab determines where messages go.
 -- `variants.GROUP` and `variants.RAID` replace options on the Group and
 -- Battleground tabs; Battleground inherits Group, and false clears a slot.
--- A message can include an `emote` token and a {location} placeholder.
+-- A message sends chat text, an `emote` token, or both: "Wave" is emote-only
+-- and says nothing. Chat text can hold a {location} placeholder.
 -- `battlegrounds[instanceID]` supplies a menu for a specific battleground.
 -- On a PlayStation pad A = Cross, X = Square, Y = Triangle, B = Circle.
 
@@ -24,9 +25,9 @@ ns.DefaultMenu = {
 	},
 	X = { label = "Social",
 		A = { label = "Greet",
-			A = { label = "Hello",   text = "Well met!" },
-			X = { label = "Goodbye", text = "Farewell!" },
-			Y = { label = "Wave",    text = "Hello there!" },
+			A = { label = "Hello",   text = "Hello" },
+			X = { label = "Goodbye", text = "Farewell", emote = "WAVE" },
+			Y = { label = "Wave",    emote = "WAVE" },
 		},
 		X = { label = "Group",
 			A = { label = "Invite please!",  text = "Invite please!" },

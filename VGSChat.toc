@@ -8,3 +8,4 @@
 Messages.lua
 VGSChat.lua
 Editor.lua
+MinimapButton.lua

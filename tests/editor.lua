@@ -30,7 +30,7 @@ end
 for _, method in ipairs({ "SetFrameStrata", "SetToplevel", "SetMovable", "SetClampedToScreen", "EnableMouse",
 	"EnableMouseWheel", "EnableKeyboard", "RegisterForDrag", "RegisterForClicks", "SetAllPoints", "SetTextColor", "SetAlpha",
 	"SetJustifyH", "SetColorTexture", "SetTexture", "AddMaskTexture", "SetFontObject", "SetTextInsets",
-	"SetAutoFocus", "SetMaxLetters", "SetScale", "SetScrollChild", "SetVerticalScroll", "StartMoving", "StopMovingOrSizing" }) do
+	"SetAutoFocus", "SetMaxLetters", "SetScale", "SetScrollChild", "SetHighlightTexture", "SetOwner", "AddLine", "SetVerticalScroll", "StartMoving", "StopMovingOrSizing" }) do
 	methods[method] = function() end
 end
 function methods:CreateTexture() return Object("Texture", nil, self) end
@@ -90,7 +90,14 @@ function methods:SetBindingClick(priority, key, target, button)
 end
 function CreateFrame(...) return Object(...) end
 UIParent = Object("Frame"); UIParent:SetSize(960, 540)
+Minimap = Object("Frame", nil, UIParent); Minimap:SetSize(198, 198)
+GameTooltip = Object("GameTooltip", nil, UIParent)
+function methods:GetCenter() return 800, 400 end
+function methods:GetEffectiveScale() return 1 end
+local cursorX, cursorY = 0, 0
+function GetCursorPosition() return cursorX, cursorY end
 function InCombatLockdown() return combat end
+SlashCmdList = {}
 function RegisterStateDriver(frame, state, driver)
 	assert(not combat and state == "context" and (driver == "[group] GROUP; DEFAULT" or driver == "RAID" or driver == "WSG"))
 	frame.driver = driver
@@ -113,6 +120,7 @@ for _, frame in ipairs(objects) do
 	if frame.events.ADDON_LOADED then frame.scripts.OnEvent(frame, "ADDON_LOADED", "VGSChat") end
 end
 assert(loadfile("Editor.lua"))("VGSChat", ns)
+assert(loadfile("MinimapButton.lua"))("VGSChat", ns)
 VGSChatEditor:Show()
 local function Find(predicate, optional)
 	for _, obj in ipairs(objects) do if obj:IsVisible() and predicate(obj) then return obj end end
@@ -129,6 +137,11 @@ local function Select(path) Click(Row(path)) end
 local function Expand(path) Click(Row(path).expand) end
 local function Undo() Click(Button("Undo")) end
 local function Field(y) return Find(function(o) return o.kind == "EditBox" and o.point[3] == y end) end
+local function emotePanelShown()
+	for _, o in ipairs(objects) do
+		if o.kind == "Text" and o.text == "Emote" then return o.parent:IsShown() end
+	end
+end
 local function Type(box, text) box.text = text; box.scripts.OnTextChanged(box, true) end
 local function Move(from, to)
 	Select(from); Click(Button("Move / swap..."))
@@ -184,7 +197,7 @@ combat = true
 Click(Button("Compact: On")); Pad("X"); Pad("A")
 assert(table.concat(LeafLabels(VGSChatMenu), ",") == "XAA - Hello,XAX - Goodbye,XAY - Wave")
 Click(Button("Compact: Off")); assert(VGSChatOpen:GetAttribute("path") == "XA")
-Pad("A"); assert(sent[1] == "Well met!" and not VGSChatMenu:IsShown())
+Pad("A"); assert(sent[1] == "Hello" and not VGSChatMenu:IsShown())
 combat = false; Click(Button("Compact: On"))
 
 -- Shoulder overrides cover modifier keys, wrap tabs, reset a partial sequence,
@@ -264,8 +277,8 @@ assert(ns.DB.menu.A == nil and ns.DB.menu.X.Y.A.text == "Yes!", "Move must prese
 assert(Row("XY").selection.shown, "Moved option should stay selected")
 Undo(); assert(ns.DB.menu.A.A.text == "Yes!" and ns.DB.menu.X.Y == nil)
 Move("A", "XAA")
-assert(ns.DB.menu.A.text == "Well met!" and ns.DB.menu.X.A.A.A.text == "Yes!", "Swap must preserve both subtrees")
-Undo(); assert(ns.DB.menu.A.A.text == "Yes!" and ns.DB.menu.X.A.A.text == "Well met!")
+assert(ns.DB.menu.A.text == "Hello" and ns.DB.menu.X.A.A.A.text == "Yes!", "Swap must preserve both subtrees")
+Undo(); assert(ns.DB.menu.A.A.text == "Yes!" and ns.DB.menu.X.A.A.text == "Hello")
 
 -- A depth-four destination must reject a group, and descendants cannot receive their parent.
 Select("XAA"); Click(Button("Remove")); Click(Button("+ Group"))
@@ -277,7 +290,7 @@ end
 Click(Button("Cancel"))
 Select("XAAA"); assert(Find(function(o) return o.label and o.label.text == "+ Group" end, true) == nil)
 Select("XAAX"); assert(Button("+ Group").enabled == false, "Depth-four slots only accept messages")
-Undo(); Undo(); Undo(); assert(ns.DB.menu.X.A.A.text == "Well met!")
+Undo(); Undo(); Undo(); assert(ns.DB.menu.X.A.A.text == "Hello")
 
 -- Editing an open menu leaves its active shape and text together until it closes.
 Expand("A"); Select("AA"); Pad("LeftButton")
@@ -324,11 +337,11 @@ Pad("A")
 assert(sent[1] == "Thanks for the group!" and sent[2] == "PARTY")
 Pad("LeftButton"); Pad("LB"); Pad("X"); Pad("A")
 assert(LeafLabels(VGSChatMenu)[1] == "XAA - Hello", "Switching to Say must restore its own mapping")
-Pad("A"); assert(sent[1] == "Well met!" and sent[2] == "SAY")
+Pad("A"); assert(sent[1] == "Hello" and sent[2] == "SAY")
 Group("RAID"); Pad("LeftButton"); Pad("X"); Pad("A"); Pad("A")
 assert(sent[1] == "Thanks for the group!" and sent[2] == "RAID", "Raid inherits the broad Group override")
 Group(); Pad("LeftButton"); Pad("X"); Pad("A"); Pad("A")
-assert(sent[1] == "Well met!" and sent[2] == "SAY")
+assert(sent[1] == "Hello" and sent[2] == "SAY")
 combat = false; Event("PLAYER_REGEN_ENABLED")
 
 -- More specific overrides, undo, and restoration of inheritance.
@@ -383,10 +396,10 @@ assert(legacy.A.chat == "SAY" and legacy.X.chat == "GROUP" and legacy.Y.variants
 Select("X"); Click(Button("Group")); Click(Button("Remove")); Click(Button("Remove group"))
 assert(ns.DB.menu.X.variants.GROUP == false)
 Click(Button("+ Message")); Type(Field(-94), "Thanks for the group"); Type(Field(-154), "Thanks for the group!")
-assert(ns.DB.menu.X.A.A.text == "Well met!")
+assert(ns.DB.menu.X.A.A.text == "Hello")
 combat = true
 Group(); Pad("LeftButton"); Pad("X"); assert(VGSChatOpen:GetAttribute("path") == "X")
-Pad("A"); Pad("A"); assert(sent[1] == "Well met!")
+Pad("A"); Pad("A"); assert(sent[1] == "Hello")
 Group("PARTY"); Pad("LeftButton"); Pad("X")
 assert(not VGSChatOpen:GetAttribute("open") and sent[1] == "Thanks for the group!" and sent[2] == "PARTY")
 combat = false; Group(nil, "RAID", "pvp"); combat = true
@@ -405,7 +418,7 @@ for _, obj in ipairs(objects) do
 	if obj:IsVisible() and obj.description then assert(obj.path ~= "YAAA", "A variant subtree must not exceed four presses") end
 end
 Click(Button("Cancel")); Undo(); Undo(); Undo(); Undo(); Undo()
-assert(ns.DB.menu.X.A.A.text == "Well met!")
+assert(ns.DB.menu.X.A.A.text == "Hello")
 
 -- Long labels and conditional controls keep the preview inside the right
 -- viewport. The preview is only scaled when its wrapped content needs it.
@@ -440,7 +453,7 @@ view:Hide()
 ns.DefaultMenu = shippedDefaults
 VGSChatDB = nil; Event("ADDON_LOADED", "VGSChat")
 ns.MenuChanged()
-assert(ns.DB.version == 4 and ns.savedLoaded == false)
+assert(ns.DB.version == 5 and ns.savedLoaded == false)
 assert(ns.ResolveNode(ns.GetMenu(), "GROUP").X.A.A.emote == "OOM")
 Group("PARTY"); combat = true
 Pad("LeftButton"); Pad("X"); Pad("A")
@@ -449,10 +462,32 @@ Pad("A"); assert(sent[1] == "Need mana." and sent[2] == "PARTY" and emotes[#emot
 local voiceCount = #emotes
 Pad("LeftButton"); Pad("X"); Pad("A"); Pad("Y")
 assert(sent[1] == "Wait up!" and #emotes == voiceCount)
+
+-- The shipped Wave option is emote-only: it waves without touching chat, even
+-- with no channel. Goodbye says its line and waves.
+Group()
+Pad("LeftButton"); Pad("X"); Pad("A")
+assert(table.concat(LeafLabels(VGSChatMenu), ",") == "XAA - Hello,XAX - Goodbye,XAY - Wave")
+local previousSend = sent
+Pad("Y")
+assert(#emotes == voiceCount + 1 and emotes[#emotes] == "WAVE" and sent == previousSend)
+assert(not VGSChatMenu:IsShown() and ns.ResolveNode(ns.GetMenu(), "DEFAULT").X.A.Y.text == nil)
+Pad("LeftButton"); Pad("X"); Pad("A"); Pad("X")
+assert(sent[1] == "Farewell" and sent[2] == "SAY" and emotes[#emotes] == "WAVE")
+assert(not ns.IsAvailable({ text = "hi" }, "GROUP") and ns.IsAvailable({ emote = "WAVE" }, "GROUP"))
 combat = false
-Click(Button("Group")); Select("XAA"); Click(Button("Mana voice: On"))
-assert(ns.DB.menu.X.variants.GROUP.A.A.emote == nil)
-Click(Button("Send now")); assert(#emotes == voiceCount)
+
+-- The emote picker sets a token, clears it, and accepts a typed one; each
+-- change is undoable.
+voiceCount = #emotes
+Click(Button("Group")); Select("XAA"); Click(Button("Emote: Out of mana"))
+Click(Button("No emote")); assert(ns.DB.menu.X.variants.GROUP.A.A.emote == nil)
+Group("PARTY"); Click(Button("Send now"))
+assert(sent[1] == "Need mana." and sent[2] == "PARTY" and #emotes == voiceCount)
+Type(Field(-394), "wave"); assert(ns.DB.menu.X.variants.GROUP.A.A.emote == "WAVE")
+assert(Button("Emote: Wave"))
+Select("XAA"); assert(not emotePanelShown())
+Undo(); assert(ns.DB.menu.X.variants.GROUP.A.A.emote == nil)
 Undo(); assert(ns.DB.menu.X.variants.GROUP.A.A.emote == "OOM")
 ns.ResetToDefaults(); assert(ns.DB.menu.X.variants.GROUP.A.A.emote == "OOM")
 
@@ -494,13 +529,23 @@ for _, key in ipairs(ns.CHOICES) do legacyMenu[key].variants = nil end
 legacyMenu.X.variants = { GROUP = { label = "My group", A = { label = "Custom", text = "Custom!" } }, RAID = false }
 legacyMenu.Y.A.text = "My help"
 VGSChatDB = { menu = legacyMenu, compact = true, version = 2 }; Event("ADDON_LOADED", "VGSChat")
-assert(ns.DB.version == 4 and ns.DB.compact)
+assert(ns.DB.version == 5 and ns.DB.compact)
 assert(ns.DB.menu.X.variants.GROUP.A.text == "Custom!" and ns.DB.menu.X.variants.RAID == false)
 assert(ns.DB.menu.Y.A.text == "My help" and ns.DB.menu.Y.variants == nil)
 assert(ns.DB.menu.A.variants.RAID.A.text == "2-3 inc {location}")
 ns.DB.menu.A.variants.RAID.A.text = "Edited incoming"
 Event("ADDON_LOADED", "VGSChat"); assert(ns.DB.menu.A.variants.RAID.A.text == "Edited incoming")
 assert(shippedDefaults.A.variants.RAID.A.text == "2-3 inc {location}")
+
+-- First-release Greet options (Wave was "/e waves.", later demoted to Say)
+-- become the shipped ones; an edited greeting stays.
+local oldGreet = ns.CopyMenu(shippedDefaults)
+oldGreet.X.A.A = { label = "Hello", text = "Well met!", chat = "SAY" }
+oldGreet.X.A.X = { label = "Goodbye", text = "See ya!", chat = "SAY" }
+oldGreet.X.A.Y = { label = "Wave", text = "waves.", chat = "SAY" }
+VGSChatDB = { menu = oldGreet, compact = false, version = 4 }; Event("ADDON_LOADED", "VGSChat")
+assert(ns.DB.version == 5 and ns.DB.menu.X.A.A.text == "Hello" and ns.DB.menu.X.A.X.text == "See ya!")
+assert(ns.DB.menu.X.A.Y.text == nil and ns.DB.menu.X.A.Y.emote == "WAVE" and ns.DB.menu.X.A.Y ~= shippedDefaults.X.A.Y)
 
 -- Warsong has fixed CTF calls, independent of subzone names. Both HUD modes
 -- and secure sends use the Warsong profile, including manual tab switching.
@@ -561,7 +606,7 @@ versionThree.X.variants.RAID.A.text = "Custom defense."
 versionThree.Y.variants.GROUP = nil
 VGSChatDB = { menu = versionThree, compact = false, version = 3 }
 Event("ADDON_LOADED", "VGSChat")
-assert(ns.DB.version == 4 and ns.DB.menu.A.variants.RAID.battlegrounds[489].A.text == "Flag going ramp!")
+assert(ns.DB.version == 5 and ns.DB.menu.A.variants.RAID.battlegrounds[489].A.text == "Flag going ramp!")
 assert(ns.DB.menu.X.variants.RAID.A.text == "Custom defense." and ns.DB.menu.X.variants.RAID.battlegrounds == nil)
 assert(ns.DB.menu.Y.variants.GROUP == nil)
 ns.DB.menu.A.variants.RAID.battlegrounds[489].A.text = "Custom flag call!"
@@ -569,4 +614,23 @@ ns.DB.version = 3; Event("ADDON_LOADED", "VGSChat")
 assert(ns.DB.menu.A.variants.RAID.battlegrounds[489].A.text == "Custom flag call!")
 assert(shippedDefaults.A.variants.RAID.battlegrounds[489].A.text == "Flag going ramp!")
 
-print("Editor checks passed: Warsong CTF calls and editing, AB objectives, BG migrations, mana voice, smart tabs, binding cleanup, scrolling, inheritance, undo, and combat snapshots.")
+-- /vgs toggles the editor.
+assert(SLASH_VGSCHAT1 == "/vgs")
+local wasShown = VGSChatEditor:IsShown()
+SlashCmdList.VGSCHAT(""); assert(VGSChatEditor:IsShown() ~= wasShown)
+SlashCmdList.VGSCHAT(""); assert(VGSChatEditor:IsShown() == wasShown)
+
+-- The minimap button toggles the editor; dragging slides it round the map
+-- edge and saves the angle.
+local minimapButton = VGSChatMinimapButton
+assert(minimapButton.parent == Minimap and minimapButton.point[2] == Minimap)
+wasShown = VGSChatEditor:IsShown()
+minimapButton.scripts.OnClick(minimapButton); assert(VGSChatEditor:IsShown() ~= wasShown)
+minimapButton.scripts.OnClick(minimapButton); assert(VGSChatEditor:IsShown() == wasShown)
+minimapButton.scripts.OnDragStart(minimapButton)
+cursorX, cursorY = 800, 500; minimapButton.scripts.OnUpdate(minimapButton)
+minimapButton.scripts.OnDragStop(minimapButton)
+assert(ns.DB.minimapAngle == 90 and minimapButton.scripts.OnUpdate == nil)
+assert(math.abs(minimapButton.point[4]) < 1e-9 and minimapButton.point[5] == 104)
+
+print("Editor checks passed: /vgs, minimap button, Warsong CTF calls and editing, AB objectives, BG migrations, mana voice, smart tabs, binding cleanup, scrolling, inheritance, undo, and combat snapshots.")
