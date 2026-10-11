@@ -7,9 +7,10 @@
 -- category that opens the next level, up to four presses deep, so "X then Y
 -- then A" works the same as Tribes 2's "V G Y".
 --
--- The selected Say, Group or Battleground tab determines where messages go.
--- `variants.GROUP` and `variants.RAID` replace options on the Group and
--- Battleground tabs; Battleground inherits Group, and false clears a slot.
+-- The selected Whisper, Say, Group or Battleground tab determines where messages
+-- go. `variants.WHISPER`, `variants.GROUP` and `variants.RAID` replace options on
+-- those tabs; Whisper inherits Say, Battleground inherits Group, and false
+-- clears a slot.
 -- A message sends chat text, an `emote` token, or both: "Wave" is emote-only
 -- and says nothing. Chat text can hold a {location} placeholder.
 -- `battlegrounds[instanceID]` supplies a menu for a specific battleground.
@@ -26,8 +27,12 @@ ns.DefaultMenu = {
 	X = { label = "Social",
 		A = { label = "Greet",
 			A = { label = "Hello",   text = "Hello" },
-			X = { label = "Goodbye", text = "Farewell", emote = "WAVE" },
-			Y = { label = "Wave",    emote = "WAVE" },
+			-- An emote only reaches players nearby, never the whisper target, so
+			-- the Whisper tab sends text alone.
+			X = { label = "Goodbye", text = "Farewell", emote = "WAVE",
+				variants = { WHISPER = { label = "Goodbye", text = "Farewell" } } },
+			Y = { label = "Wave",    emote = "WAVE",
+				variants = { WHISPER = { label = "Thanks for the group", text = "Thanks for the group!" } } },
 		},
 		X = { label = "Group",
 			A = { label = "Invite please!",  text = "Invite please!" },

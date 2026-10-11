@@ -23,7 +23,8 @@ local MACRO_FALLBACK_ICON = 134400 -- INV_Misc_QuestionMark
 local MACRO_BODY = "/click PADChatOpen LeftButton 1"
 
 -- Xbox naming; the PAD codes are the same on every controller.
-local KEYS = { A = "PAD1", B = "PAD2", X = "PAD3", Y = "PAD4", LB = "PADLSHOULDER", RB = "PADRSHOULDER" }
+local KEYS = { A = "PAD1", B = "PAD2", X = "PAD3", Y = "PAD4", LB = "PADLSHOULDER", RB = "PADRSHOULDER",
+	UP = "PADDUP", DOWN = "PADDDOWN" }
 local CHOICES = { "A", "X", "Y" }
 local KEY_COLOR = { A = "ff60d060", X = "ff4aa3ff", Y = "ffffd100", B = "ffff5050" }
 local PRESSED_KEY_COLOR = "ff9d9d9d"
@@ -45,9 +46,12 @@ ns.CHOICES, ns.KEY_COLOR, ns.Print = CHOICES, KEY_COLOR, Print
 -- Battlegrounds aren't in the WoW: Forever beta, so the Battleground tab and
 -- zone detection stay off until launch. Flip to true to re-enable them all.
 ns.BATTLEGROUNDS_ENABLED = ns.BATTLEGROUNDS_ENABLED or false
-ns.CONTEXTS = { "DEFAULT", "GROUP", ns.BATTLEGROUNDS_ENABLED and "RAID" or nil }
+-- Tabs, left to right. Whisper and Group both inherit Say's options; Say stays
+-- the tab the menu opens on.
+ns.CONTEXTS = { "WHISPER", "DEFAULT", "GROUP", ns.BATTLEGROUNDS_ENABLED and "RAID" or nil }
 -- Retain the saved RAID variant key for existing menus; it is now the BG tab.
-ns.CONTEXT_LABELS = { DEFAULT = "Say", GROUP = "Group", RAID = "Battleground" }
+ns.CONTEXT_LABELS = { WHISPER = "Whisper", DEFAULT = "Say", GROUP = "Group", RAID = "Battleground" }
+ns.MAX_WHISPERS = 10
 ns.MAX_DEPTH = 4 -- presses per message, counting the last one
 
 -- A node is a message (a leaf the player can pick) when it sends chat text, an
@@ -120,7 +124,9 @@ function ns.PickNode(node, context)
 	if not node then return nil end
 	local variants, condition = node.variants, nil
 	if variants then
-		if context == "RAID" and variants.RAID ~= nil then condition = "RAID"
+		if context == "WHISPER" then
+			if variants.WHISPER ~= nil then condition = "WHISPER" end
+		elseif context == "RAID" and variants.RAID ~= nil then condition = "RAID"
 		elseif context ~= "DEFAULT" and variants.GROUP ~= nil then condition = "GROUP" end
 	end
 	if condition then node = variants[condition] end
@@ -152,6 +158,7 @@ end
 -- over a separate home group, matching the game's chat channel rules.
 function ns.GetChannel(chat)
 	if not chat or chat == "SAY" or chat == "DEFAULT" then return "SAY" end
+	if chat == "WHISPER" then return ns.GetWhisperTarget() and "WHISPER" or nil end
 	local instance = IsInGroup(LE_PARTY_CATEGORY_INSTANCE)
 	if chat == "GROUP" then
 		if instance then return "INSTANCE_CHAT" end
@@ -219,6 +226,20 @@ function ns.UpgradeGreetings(menu)
 	end
 end
 
+-- A whisper can't deliver an emote. Unedited Goodbye and Wave options pick up
+-- the shipped text-only Whisper versions.
+local WHISPER_UPGRADES = { X = { "Goodbye", "Farewell" }, Y = { "Wave", nil } }
+function ns.UpgradeWhisper(menu)
+	local greet = menu.X and menu.X.A
+	if type(greet) ~= "table" then return end
+	for key, old in pairs(WHISPER_UPGRADES) do
+		local node = greet[key]
+		if type(node) == "table" and node.label == old[1] and node.text == old[2] and node.emote == "WAVE" and not node.variants then
+			node.variants = DeepCopy(ns.DefaultMenu.X.A[key].variants)
+		end
+	end
+end
+
 local activeMenus = {}
 for _, context in ipairs(ns.CONTEXTS) do activeMenus[context] = ns.ResolveNode(ns.DefaultMenu, context, 0) end
 activeMenus.WSG = ns.ResolveNode(ns.DefaultMenu, "RAID", 489)
@@ -243,25 +264,29 @@ open:RegisterForClicks("AnyDown")
 for key, binding in pairs(KEYS) do open:SetAttribute("key-" .. key, binding) end
 open:SetAttribute("battlegrounds", ns.BATTLEGROUNDS_ENABLED)
 
--- LeftButton = the macro (toggle); A/X/Y/B/LB/RB = override-bound pad buttons,
--- which click this same button with the letter as the mouse button.
+-- LeftButton = the macro (toggle); A/X/Y/B/LB/RB/UP/DOWN = override-bound pad
+-- buttons, which click this same button with the letter as the mouse button.
+-- WHISPER = Y in an integrated Blizzard window (Integrations.lua), which opens
+-- straight onto the Whisper tab with that window's player picked.
 -- The restricted environment rejects the word "function" anywhere in a
 -- snippet, comments included, so the close steps are repeated inline.
 open:SetAttribute("_onclick", [[
-	if button == "LeftButton" then
+	if button == "LeftButton" or button == "WHISPER" then
 		if self:GetAttribute("open") then
+			if button == "WHISPER" then return end
 			self:ClearBindings()
 			self:SetAttribute("open", nil)
 			self:SetAttribute("path", "")
 		else
 			self:SetAttribute("open", 1)
-			local context = self:GetAttribute("state-context") or "DEFAULT"
+			local context = button == "WHISPER" and "WHISPER" or self:GetAttribute("state-context") or "DEFAULT"
 			self:SetAttribute("menucontext", context == "WSG" and "RAID" or context)
 			self:SetAttribute("menuprofile", context == "WSG" and "WSG" or "DEFAULT")
 			self:SetAttribute("path", "")
+			self:SetAttribute("whisperindex", 0)
 			for modifier in ("NONE SHIFT- CTRL- ALT- CTRL-SHIFT- ALT-SHIFT- ALT-CTRL- ALT-CTRL-SHIFT-"):gmatch("%S+") do
 				local prefix = modifier == "NONE" and "" or modifier
-				for key in ("A X Y B LB RB"):gmatch("%S+") do
+				for key in (context == "WHISPER" and "A X Y B LB RB UP DOWN" or "A X Y B LB RB"):gmatch("%S+") do
 					self:SetBindingClick(true, prefix .. self:GetAttribute("key-" .. key), "PADChatOpen", key)
 				end
 			end
@@ -273,15 +298,34 @@ open:SetAttribute("_onclick", [[
 	if button == "LB" or button == "RB" then
 		local context = self:GetAttribute("menucontext") or "DEFAULT"
 		if button == "RB" then
-			context = context == "DEFAULT" and "GROUP" or context == "GROUP" and "RAID" or "DEFAULT"
+			context = context == "WHISPER" and "DEFAULT" or context == "DEFAULT" and "GROUP" or context == "GROUP" and "RAID" or "WHISPER"
 		else
-			context = context == "DEFAULT" and "RAID" or context == "RAID" and "GROUP" or "DEFAULT"
+			context = context == "WHISPER" and "RAID" or context == "RAID" and "GROUP" or context == "GROUP" and "DEFAULT" or "WHISPER"
 		end
 		if context == "RAID" and not self:GetAttribute("battlegrounds") then
-			context = button == "RB" and "DEFAULT" or "GROUP"
+			context = button == "RB" and "WHISPER" or "GROUP"
 		end
 		self:SetAttribute("menucontext", context)
 		self:SetAttribute("path", "")
+		-- The D-pad only belongs to PAD Chat while the Whisper tab is showing.
+		for modifier in ("NONE SHIFT- CTRL- ALT- CTRL-SHIFT- ALT-SHIFT- ALT-CTRL- ALT-CTRL-SHIFT-"):gmatch("%S+") do
+			local prefix = modifier == "NONE" and "" or modifier
+			for key in ("UP DOWN"):gmatch("%S+") do
+				if context == "WHISPER" then
+					self:SetBindingClick(true, prefix .. self:GetAttribute("key-" .. key), "PADChatOpen", key)
+				else
+					self:ClearBinding(prefix .. self:GetAttribute("key-" .. key))
+				end
+			end
+		end
+		return
+	end
+	-- An unbounded step; the list itself can change in combat, so the
+	-- insecure side wraps it onto however many names there are.
+	if button == "UP" or button == "DOWN" then
+		if self:GetAttribute("menucontext") == "WHISPER" then
+			self:SetAttribute("whisperindex", (self:GetAttribute("whisperindex") or 0) + (button == "UP" and -1 or 1))
+		end
 		return
 	end
 	if button == "B" then
@@ -372,6 +416,89 @@ function ns.ResetToDefaults()
 end
 
 ------------------------------------------------------------------------
+-- Recent whispers
+------------------------------------------------------------------------
+-- The Whisper tab lists the player's online Recent Allies (Blizzard's own
+-- record of party members, whispers, trades and so on), most recent
+-- interaction first. Offline allies can't be whispered, so they're left out.
+-- While that system is off or its data is loading, the list is empty.
+-- Only Blizzard's UI may ask for the data (TryRequestRecentAlliesData is
+-- restricted; calling it raises "blocked from an action"), and it does so when
+-- the Recent Allies window opens.
+-- An open menu works from a snapshot so a list change mid-pick can't slide the
+-- selection onto someone else.
+local whisperSnapshot, pendingWhisper
+
+-- Same-realm names drop their realm, so every source spells a player alike.
+local function ShortName(name)
+	return Ambiguate and Ambiguate(name, "none") or name
+end
+
+-- Moves `name` to the front of `list`, keeping it at most MAX_WHISPERS long.
+local function PutFirst(list, name)
+	if type(name) ~= "string" or name == "" then return list end
+	name = ShortName(name)
+	for i = #list, 1, -1 do
+		if list[i]:lower() == name:lower() then table.remove(list, i) end
+	end
+	table.insert(list, 1, name)
+	for i = #list, ns.MAX_WHISPERS + 1, -1 do list[i] = nil end
+	return list
+end
+
+function ns.RecentAlliesReady()
+	return C_RecentAllies and C_RecentAllies.IsSystemEnabled() and C_RecentAllies.IsRecentAllyDataReady() or false
+end
+
+local function RecentAllyNames()
+	local allies = {}
+	for _, ally in ipairs(C_RecentAllies.GetRecentAllies()) do
+		if ally.stateData.isOnline then
+			local latest = ally.interactionData.interactions[1] -- Blizzard lists newest first
+			allies[#allies + 1] = { name = ShortName(ally.characterData.fullName), time = latest and latest.timestamp or 0 }
+		end
+	end
+	table.sort(allies, function(a, b)
+		if a.time ~= b.time then return a.time > b.time end
+		return a.name < b.name
+	end)
+	local names = {}
+	for i = 1, math.min(#allies, ns.MAX_WHISPERS) do names[i] = allies[i].name end
+	return names
+end
+
+local function LiveWhispers()
+	return ns.RecentAlliesReady() and RecentAllyNames() or {}
+end
+
+function ns.GetWhispers()
+	return whisperSnapshot or LiveWhispers()
+end
+
+-- A player picked in another window (Integrations.lua) heads the next menu's
+-- list, whether or not they're an ally yet.
+function ns.SetPendingWhisper(name) pendingWhisper = name end
+
+local function TakeSnapshot()
+	local list = {}
+	for i, name in ipairs(LiveWhispers()) do list[i] = name end
+	PutFirst(list, pendingWhisper)
+	pendingWhisper = nil
+	return list
+end
+
+function ns.GetWhisperIndex()
+	local count = #ns.GetWhispers()
+	if count == 0 then return nil end
+	return (open:GetAttribute("whisperindex") or 0) % count + 1
+end
+
+function ns.GetWhisperTarget()
+	local index = ns.GetWhisperIndex()
+	return index and ns.GetWhispers()[index]
+end
+
+------------------------------------------------------------------------
 -- Sending
 ------------------------------------------------------------------------
 local lastSeq = 0
@@ -381,11 +508,11 @@ local function SendNode(node, context)
 	if HasText(node) then
 		local chatType = ns.GetChannel(context)
 		if not chatType then
-			Print("Join a " .. (context == "RAID" and "battleground" or "group") .. " to send this message.")
+			Print(context == "WHISPER" and "No Recent Allies online to whisper." or "Join a " .. (context == "RAID" and "battleground" or "group") .. " to send this message.")
 			return
 		end
 		local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
-		local ok, err = pcall(send, ns.FormatMessage(node.text, context), chatType)
+		local ok, err = pcall(send, ns.FormatMessage(node.text, context), chatType, nil, chatType == "WHISPER" and ns.GetWhisperTarget() or nil)
 		if not ok then Print("|cffff5050Couldn't send:|r " .. tostring(err)); return end
 	end
 	if node.emote then
@@ -442,10 +569,13 @@ function ns.CreateMenuView(parent, name)
 	sequence:SetWidth(232); sequence:SetWordWrap(false); sequence:SetJustifyH("LEFT")
 	sequence:SetTextColor(0.7, 0.68, 0.63)
 	local tabs = {}
-	for i, context in ipairs(ns.CONTEXTS) do
+	local tabX = 14
+	for _, context in ipairs(ns.CONTEXTS) do
 		local tab = CreateFrame("Frame", nil, menu)
-		tab:SetSize(({ 52, 64, 104 })[i], 24)
-		tab:SetPoint("TOPLEFT", 14 + ({ 0, 58, 128 })[i], -34)
+		local width = ({ WHISPER = 56, DEFAULT = 40, GROUP = 48, RAID = 82 })[context]
+		tab:SetSize(width, 24)
+		tab:SetPoint("TOPLEFT", tabX, -34)
+		tabX = tabX + width + 2
 		tab.bg = tab:CreateTexture(nil, "BACKGROUND")
 		tab.bg:SetAllPoints()
 		tab.label = tab:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -590,6 +720,66 @@ menu:SetPoint("LEFT", UIParent, "LEFT", 40, 80)
 menu:SetFrameStrata("HIGH")
 menu:SetClampedToScreen(true)
 
+-- Recent whispers, docked to the right of the HUD while the Whisper tab shows.
+local whisperList = CreateFrame("Frame", "PADChatWhispers", menu)
+whisperList:SetPoint("TOPLEFT", menu, "TOPRIGHT", 6, 0)
+whisperList:SetWidth(170)
+do
+	local edge = whisperList:CreateTexture(nil, "BACKGROUND", nil, 0)
+	edge:SetAllPoints()
+	edge:SetColorTexture(0.29, 0.27, 0.22, 0.9)
+	local bg = whisperList:CreateTexture(nil, "BACKGROUND", nil, 1)
+	bg:SetPoint("TOPLEFT", 1, -1)
+	bg:SetPoint("BOTTOMRIGHT", -1, 1)
+	bg:SetColorTexture(0.09, 0.09, 0.1, 0.96)
+	local title = whisperList:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	title:SetPoint("TOPLEFT", 14, -12)
+	title:SetText("Whisper to")
+	local hint = whisperList:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	hint:SetPoint("TOPRIGHT", -14, -12)
+	hint:SetText("Up / Down")
+	hint:SetTextColor(0.7, 0.68, 0.63)
+	local line = whisperList:CreateTexture(nil, "ARTWORK")
+	line:SetSize(142, 1)
+	line:SetPoint("TOPLEFT", 14, -34)
+	line:SetColorTexture(0.29, 0.27, 0.22, 0.7)
+end
+local whisperHighlight = whisperList:CreateTexture(nil, "ARTWORK")
+whisperHighlight:SetColorTexture(0.22, 0.2, 0.15, 1)
+local whisperRows = {}
+
+function whisperList:Display(names, selected)
+	local y = 40
+	for i = 1, math.max(1, #names) do
+		local row = whisperRows[i]
+		if not row then
+			row = whisperList:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+			row:SetWidth(134); row:SetJustifyH("LEFT"); row:SetWordWrap(false)
+			whisperRows[i] = row
+		end
+		row:SetPoint("TOPLEFT", 18, -y - 5)
+		row:Show()
+		if #names == 0 then
+			local loading = C_RecentAllies and C_RecentAllies.IsSystemEnabled() and not C_RecentAllies.IsRecentAllyDataReady()
+			row:SetText(loading and "Open Recent Allies to load" or "No allies online")
+			row:SetTextColor(0.5, 0.5, 0.5)
+		else
+			row:SetText(Ambiguate and Ambiguate(names[i], "short") or names[i])
+			if i == selected then
+				row:SetTextColor(1, 0.82, 0.4)
+				whisperHighlight:SetPoint("TOPLEFT", 14, -y)
+				whisperHighlight:SetSize(142, 22)
+			else
+				row:SetTextColor(0.94, 0.92, 0.89)
+			end
+		end
+		y = y + 22
+	end
+	for i = math.max(1, #names) + 1, #whisperRows do whisperRows[i]:Hide() end
+	whisperHighlight:SetShown(selected ~= nil)
+	self:SetHeight(y + 12)
+end
+
 local function UpdateMenu()
 	if not open:GetAttribute("open") then menu:Hide(); return end
 	local path = open:GetAttribute("path") or ""
@@ -597,6 +787,8 @@ local function UpdateMenu()
 	local node = NodeAt(path, context, open:GetAttribute("menuprofile"))
 		or NodeAt("", context, open:GetAttribute("menuprofile"))
 	menu:Display(node, path == "" and "Quick Chat" or (node.label ~= "" and node.label or nil) or "Group", path, context)
+	whisperList:SetShown(context == "WHISPER")
+	if context == "WHISPER" then whisperList:Display(ns.GetWhispers(), ns.GetWhisperIndex()) end
 end
 ns.UpdateMenu = UpdateMenu
 
@@ -607,6 +799,11 @@ open:HookScript("OnClick", function(self)
 		lastSeq = seq
 		local context = self:GetAttribute("sentcontext")
 		SendNode(NodeAt(self:GetAttribute("sentpath") or "", context, self:GetAttribute("sentprofile")), context)
+	end
+	if self:GetAttribute("open") then
+		whisperSnapshot = whisperSnapshot or TakeSnapshot()
+	else
+		whisperSnapshot = nil
 	end
 	PublishMenu()
 	UpdateMenu()
@@ -682,12 +879,15 @@ events:SetScript("OnEvent", function(_, event, arg1)
 		if type(PADChatDB) ~= "table" then PADChatDB = {} end
 		ns.DB = PADChatDB
 		if type(ns.DB.compact) ~= "boolean" then ns.DB.compact = false end
+		if type(ns.DB.enhanceLFG) ~= "boolean" then ns.DB.enhanceLFG = true end
+		if type(ns.DB.enhanceRecentAllies) ~= "boolean" then ns.DB.enhanceRecentAllies = true end
 		if type(ns.DB.menu) ~= "table" then ns.DB.menu = DeepCopy(ns.DefaultMenu) end
 		local version = tonumber(ns.DB.version) or 0
 		if version < 4 then ns.UpgradeDefaults(ns.DB.menu, version < 3) end
 		if version < 5 then ns.UpgradeGreetings(ns.DB.menu) end
+		if version < 7 then ns.UpgradeWhisper(ns.DB.menu) end
 		ns.MigrateMenu(ns.DB.menu)
-		ns.DB.version = 5
+		ns.DB.version = 7
 	end
 	UpdateContextDriver()
 	PublishMenu()

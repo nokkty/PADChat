@@ -6,7 +6,7 @@ local WIDTH, HEIGHT, SPLIT = 760, 650, 350
 local selected, expanded = "A", { X = true, XA = true }
 local context = "DEFAULT"
 local history, typingField = {}, nil
-local Refresh, nameBox, textBox, detail, move, confirm, emotePanel, emoteField, DrawEmotes
+local Refresh, nameBox, textBox, detail, move, confirm, emotePanel, emoteField, DrawEmotes, settings
 
 -- Return the saved slot, following the selected condition through its parents.
 -- Ownership prevents edits to inherited nodes from changing the default menu.
@@ -68,6 +68,7 @@ local function Select(path)
 	if detail then detail:ScrollTo(0) end
 	typingField, selected = nil, path
 	if emotePanel then emotePanel:Hide() end
+	if settings then settings:Hide() end
 	for i = 1, #path - 1 do expanded[path:sub(1, i)] = true end
 	Refresh()
 end
@@ -171,6 +172,11 @@ header:SetScript("OnDragStop", function() editor:StopMovingOrSizing() end)
 Text(header, "GameFontNormalLarge", 18, -12, 320, "PAD Chat")
 local subtitle = Text(header, "GameFontHighlightSmall", 18, -34, 320, "Menu setup")
 subtitle:SetTextColor(0.7, 0.68, 0.63)
+Button(header, "Settings", WIDTH - 378, -16, 86, function()
+	if settings:IsShown() then settings:Hide(); return end
+	nameBox:ClearFocus(); textBox:ClearFocus(); move:Hide(); confirm:Hide(); emotePanel:Hide()
+	settings:Show()
+end)
 local compact = Button(header, "", WIDTH - 284, -16, 114, function()
 	ns.DB.compact = not ns.DB.compact
 	ns.UpdateMenu(); Refresh(true)
@@ -198,8 +204,9 @@ cancelHint:SetTextColor(0.7, 0.68, 0.63)
 local mappingCaption = Text(editor, "GameFontHighlightSmall", 18, -74, 324)
 mappingCaption:SetTextColor(0.7, 0.68, 0.63)
 local mappings = {}
+local mappingWidth = math.floor((SPLIT - 26 - (#ns.CONTEXTS - 1) * 6) / #ns.CONTEXTS)
 for i, condition in ipairs(ns.CONTEXTS) do
-	mappings[condition] = Button(editor, ns.CONTEXT_LABELS[condition], 16 + (i - 1) * 110, -94, 104, function()
+	mappings[condition] = Button(editor, ns.CONTEXT_LABELS[condition], 16 + (i - 1) * (mappingWidth + 6), -94, mappingWidth, function()
 		nameBox:ClearFocus(); textBox:ClearFocus(); move:Hide(); confirm:Hide(); emotePanel:Hide()
 		typingField, context = nil, condition; detail:ScrollTo(0); Refresh()
 	end)
@@ -286,6 +293,35 @@ Button(editor, "Reset defaults", WIDTH - 148, -HEIGHT + 39, 130, function()
 		Remember(); selected, expanded, context = "A", { X = true, XA = true }, "DEFAULT"; ns.ResetToDefaults(); Refresh()
 	end)
 end)
+
+-- Settings sit over the details pane, like the move and emote pickers.
+settings = CreateFrame("Frame", nil, editor)
+settings:SetSize(WIDTH - SPLIT - 20, HEIGHT - 124); settings:SetPoint("TOPLEFT", SPLIT + 10, -66)
+settings:SetFrameLevel(editor:GetFrameLevel() + 20); settings:EnableMouse(true); Surface(settings, 0.12, 0.12, 0.13); settings:Hide()
+Text(settings, "GameFontHighlightLarge", 14, -14, settings:GetWidth() - 28, "Settings")
+local integrationsTitle = Text(settings, "GameFontNormal", 14, -52, settings:GetWidth() - 28, "Integrations")
+local integrationsLine = settings:CreateTexture(nil, "ARTWORK")
+integrationsLine:SetPoint("TOPLEFT", integrationsTitle, "BOTTOMLEFT", 0, -6); integrationsLine:SetSize(settings:GetWidth() - 28, 1)
+integrationsLine:SetColorTexture(0.22, 0.22, 0.23, 1)
+Text(settings, "GameFontHighlight", 14, -84, settings:GetWidth() - 120, "Enhance LFG Window")
+local lfgHelp = Text(settings, "GameFontHighlightSmall", 14, -106, settings:GetWidth() - 120,
+	"Press |c" .. ns.KEY_COLOR.Y .. "Y|r on a selected group or player, or on a player in the Who tab, to whisper them with quick chat.")
+lfgHelp:SetWordWrap(true); lfgHelp:SetTextColor(0.7, 0.68, 0.63)
+local lfgToggle = Button(settings, "", settings:GetWidth() - 90, -80, 76, function()
+	ns.DB.enhanceLFG = not ns.DB.enhanceLFG
+	ns.UpdateIntegrations(); Refresh(true)
+end)
+lfgToggle.setting = "enhanceLFG"
+Text(settings, "GameFontHighlight", 14, -154, settings:GetWidth() - 120, "Enhance Recent Allies Window")
+local alliesHelp = Text(settings, "GameFontHighlightSmall", 14, -176, settings:GetWidth() - 120,
+	"Press |c" .. ns.KEY_COLOR.Y .. "Y|r on an online ally in the Recent Allies window to whisper them with quick chat.")
+alliesHelp:SetWordWrap(true); alliesHelp:SetTextColor(0.7, 0.68, 0.63)
+local alliesToggle = Button(settings, "", settings:GetWidth() - 90, -150, 76, function()
+	ns.DB.enhanceRecentAllies = not ns.DB.enhanceRecentAllies
+	ns.UpdateIntegrations(); Refresh(true)
+end)
+alliesToggle.setting = "enhanceRecentAllies"
+Button(settings, "Done", settings:GetWidth() - 90, -settings:GetHeight() + 42, 76, function() settings:Hide() end)
 
 -- Destination picker includes empty slots and swaps, without overwriting data.
 move = CreateFrame("Frame", nil, editor)
@@ -530,6 +566,8 @@ end
 
 Refresh = function(textOnly)
 	compact.label:SetText(ns.DB.compact and "Compact: On" or "Compact: Off")
+	lfgToggle.label:SetText(ns.DB.enhanceLFG and "On" or "Off")
+	alliesToggle.label:SetText(ns.DB.enhanceRecentAllies and "On" or "Off")
 	while #selected > 1 and not IsGroup(At(selected:sub(1, -2))) do selected = selected:sub(1, -2) end
 	local node, owned = At(selected)
 	local message, group = node and ns.IsMessage(node), IsGroup(node)
@@ -558,7 +596,7 @@ Refresh = function(textOnly)
 	emptyHint:SetShown(node == nil); addMessage:SetShown(node == nil); addGroup:SetShown(node == nil)
 	addMessage:SetEnabled(owned); addGroup:SetEnabled(owned and #selected < ns.MAX_DEPTH); groupHint:SetShown(group)
 	moveButton:SetShown(node ~= nil); remove:SetShown(node ~= nil); sendNow:SetShown(message)
-	moveButton:SetEnabled(owned); remove:SetEnabled(owned); 	sendNow:SetEnabled(ns.IsAvailable(node, context))
+	moveButton:SetEnabled(owned); remove:SetEnabled(owned); 	sendNow:SetEnabled(context ~= "WHISPER" and ns.IsAvailable(node, context))
 	emoteButton:SetShown(message); emoteButton:SetEnabled(owned)
 	emoteButton.label:SetText("Emote: " .. (node and node.emote and (EMOTE_NAMES[node.emote] or node.emote) or "Off"))
 	local actionY = message and -196 or -136
