@@ -312,15 +312,6 @@ local lfgToggle = Button(settings, "", settings:GetWidth() - 90, -80, 76, functi
 	ns.UpdateIntegrations(); Refresh(true)
 end)
 lfgToggle.setting = "enhanceLFG"
-Text(settings, "GameFontHighlight", 14, -154, settings:GetWidth() - 120, "Enhance Recent Allies Window")
-local alliesHelp = Text(settings, "GameFontHighlightSmall", 14, -176, settings:GetWidth() - 120,
-	"Press |c" .. ns.KEY_COLOR.Y .. "Y|r on an online ally in the Recent Allies window to whisper them with quick chat.")
-alliesHelp:SetWordWrap(true); alliesHelp:SetTextColor(0.7, 0.68, 0.63)
-local alliesToggle = Button(settings, "", settings:GetWidth() - 90, -150, 76, function()
-	ns.DB.enhanceRecentAllies = not ns.DB.enhanceRecentAllies
-	ns.UpdateIntegrations(); Refresh(true)
-end)
-alliesToggle.setting = "enhanceRecentAllies"
 Button(settings, "Done", settings:GetWidth() - 90, -settings:GetHeight() + 42, 76, function() settings:Hide() end)
 
 -- Destination picker includes empty slots and swaps, without overwriting data.
@@ -567,7 +558,6 @@ end
 Refresh = function(textOnly)
 	compact.label:SetText(ns.DB.compact and "Compact: On" or "Compact: Off")
 	lfgToggle.label:SetText(ns.DB.enhanceLFG and "On" or "Off")
-	alliesToggle.label:SetText(ns.DB.enhanceRecentAllies and "On" or "Off")
 	while #selected > 1 and not IsGroup(At(selected:sub(1, -2))) do selected = selected:sub(1, -2) end
 	local node, owned = At(selected)
 	local message, group = node and ns.IsMessage(node), IsGroup(node)
@@ -596,7 +586,7 @@ Refresh = function(textOnly)
 	emptyHint:SetShown(node == nil); addMessage:SetShown(node == nil); addGroup:SetShown(node == nil)
 	addMessage:SetEnabled(owned); addGroup:SetEnabled(owned and #selected < ns.MAX_DEPTH); groupHint:SetShown(group)
 	moveButton:SetShown(node ~= nil); remove:SetShown(node ~= nil); sendNow:SetShown(message)
-	moveButton:SetEnabled(owned); remove:SetEnabled(owned); 	sendNow:SetEnabled(context ~= "WHISPER" and ns.IsAvailable(node, context))
+	moveButton:SetEnabled(owned); remove:SetEnabled(owned); 	sendNow:SetEnabled(context ~= "WHISPER" and context ~= "LFG" and ns.IsAvailable(node, context))
 	emoteButton:SetShown(message); emoteButton:SetEnabled(owned)
 	emoteButton.label:SetText("Emote: " .. (node and node.emote and (EMOTE_NAMES[node.emote] or node.emote) or "Off"))
 	local actionY = message and -196 or -136

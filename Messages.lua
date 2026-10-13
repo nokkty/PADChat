@@ -12,7 +12,8 @@
 -- those tabs; Whisper inherits Say, Battleground inherits Group, and false
 -- clears a slot.
 -- A message sends chat text, an `emote` token, or both: "Wave" is emote-only
--- and says nothing. Chat text can hold a {location} placeholder.
+-- and says nothing. Chat text can hold {location}, {LEVEL} and {CLASS}
+-- placeholders. The LFG tab (`variants.LFG`) inherits Whisper.
 -- `battlegrounds[instanceID]` supplies a menu for a specific battleground.
 -- On a PlayStation pad A = Cross, X = Square, Y = Triangle, B = Circle.
 
@@ -85,6 +86,11 @@ ns.DefaultMenu.A.variants = {
 		Y = { label = "Big INC {location}!", text = "Big INC {location}!" },
 	},
 }
+
+-- The LFG tab answers a Looking For Group listing with the player's role.
+ns.DefaultMenu.A.variants.LFG = { text = "{LEVEL} {CLASS} DPS" }
+ns.DefaultMenu.X.variants.LFG = { text = "{LEVEL} {CLASS} HEALS" }
+ns.DefaultMenu.Y.variants.LFG = { text = "{LEVEL} {CLASS} TANK" }
 
 -- These replacements keep the same button paths as the generic BG menu.
 ns.DefaultMenu.A.variants.RAID.battlegrounds = {

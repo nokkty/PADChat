@@ -1,5 +1,5 @@
--- Integrations with Blizzard's own windows, each switched on in the editor's
--- Settings. Both let Y open quick chat on the Whisper tab with a player picked.
+-- Integration with Blizzard's own windows, switched on in the editor's
+-- Settings. It lets Y open quick chat on the Whisper tab with a player picked.
 --
 -- Enhance LFG Window: the leader of the group or player selected in the
 -- Looking For Group window (Blizzard_GroupFinder_VanillaStyle's LFGBrowseFrame).
@@ -10,11 +10,7 @@
 -- on that row. Who rows only show a tooltip when their text is cut off, so the
 -- glyph stands in for one.
 --
--- Enhance Recent Allies Window: the online ally whose card the cursor is on
--- (smart navigation runs the card's enter/leave scripts, which show and hide
--- its tooltip). The card's tooltip gains a Y line at the bottom.
---
--- Smart navigation owns the D-pad, A and B in these windows; Y is free.
+-- Smart navigation owns the D-pad, A and B in this window; Y is free.
 -- Override bindings can't change in combat, so Y is released as combat starts
 -- (PLAYER_REGEN_DISABLED still allows it) and restored when combat ends.
 
@@ -22,7 +18,7 @@ local _, ns = ...
 
 local Y_KEY = "PAD4" -- Y / Triangle
 local owner = CreateFrame("Frame")
-local lfgHint, lfgHooked, alliesHooked, focusedAlly, bound
+local lfgHint, lfgHooked, bound
 local whoHint, whoHooked, focusedWho
 
 -- The controller's own glyph for Y (Triangle on PlayStation pads), when the
@@ -68,26 +64,11 @@ local function WhoTarget()
 end
 
 ------------------------------------------------------------------------
--- Recent Allies
-------------------------------------------------------------------------
--- Offline allies can't be whispered, so they get neither the line nor Y.
-local function AllyName(card)
-	local data = card and card.elementData
-	return data and data.stateData and data.stateData.isOnline and data.characterData and data.characterData.fullName or nil
-end
-
-local function AllyTarget()
-	if not (ns.DB and ns.DB.enhanceRecentAllies and focusedAlly and focusedAlly:IsVisible()) then return nil end
-	return AllyName(focusedAlly)
-end
-
-------------------------------------------------------------------------
 -- The shared Y binding
 ------------------------------------------------------------------------
--- A focused ally card or Who row wins over the LFG selection: it's what the
--- cursor is on.
+-- A focused Who row wins over the LFG selection: it's what the cursor is on.
 function ns.IntegrationTarget()
-	return AllyTarget() or WhoTarget() or LFGTarget()
+	return WhoTarget() or LFGTarget()
 end
 
 function ns.UpdateIntegrations()
@@ -107,13 +88,12 @@ function ns.UpdateIntegrations()
 		whoHint:SetShown(row and not InCombatLockdown() and true or false)
 	end
 	if InCombatLockdown() then return end
-	local target = ns.IntegrationTarget()
-	if target and not bound then
-		SetOverrideBindingClick(owner, true, Y_KEY, "PADChatOpen", "WHISPER")
-		bound = true
-	elseif not target and bound then
-		ClearOverrideBindings(owner)
-		bound = false
+	-- A listing opens the LFG tab; a Who row opens Whisper.
+	local button = WhoTarget() and "WHISPER" or LFGTarget() and "LFG" or nil
+	if button ~= bound then
+		if bound then ClearOverrideBindings(owner) end
+		if button then SetOverrideBindingClick(owner, true, Y_KEY, "PADChatOpen", button) end
+		bound = button
 	end
 end
 ns.UpdateLFG = ns.UpdateIntegrations
@@ -170,35 +150,10 @@ local function SetupWho()
 	hooksecurefunc(invite, "OnEnter", function(self) Enter(self, self:GetParent()) end)
 end
 
--- Cards copy the mixin's methods when the list first creates them, which
--- happens on first show, after this hook.
-local function SetupRecentAllies()
-	local card = RecentAlliesSocialCardMixin
-	if alliesHooked or not (card and card.BuildTooltip and card.HideTooltip) then return end
-	alliesHooked = true
-	hooksecurefunc(card, "BuildTooltip", function(self, tooltip)
-		focusedAlly = self
-		ns.UpdateIntegrations()
-		if not (ns.DB and ns.DB.enhanceRecentAllies and AllyName(self)) or InCombatLockdown() then return end
-		if SocialUIUtil and SocialUIUtil.AddSeparatorToTooltip then
-			SocialUIUtil.AddSeparatorToTooltip(tooltip)
-		else
-			tooltip:AddLine(" ")
-		end
-		local atlas = YAtlas()
-		local key = atlas and CreateAtlasMarkup and CreateAtlasMarkup(atlas, 20, 20) or ("|c" .. ns.KEY_COLOR.Y .. "Y|r")
-		tooltip:AddLine(key .. " Whisper with quick chat", 0.4, 1, 0.4)
-	end)
-	hooksecurefunc(card, "HideTooltip", function(self)
-		if focusedAlly == self then focusedAlly = nil end
-		ns.UpdateIntegrations()
-	end)
-end
-
 -- Runs before the secure snippet opens the menu, so the player is first in the
 -- whisper list the menu snapshots and starts on.
 PADChatOpen:HookScript("PreClick", function(_, button)
-	if button == "WHISPER" then ns.SetPendingWhisper(ns.IntegrationTarget()) end
+	if button == "WHISPER" or button == "LFG" then ns.SetPendingWhisper(ns.IntegrationTarget()) end
 end)
 
 local events = CreateFrame("Frame")
@@ -207,15 +162,13 @@ events:RegisterEvent("PLAYER_REGEN_DISABLED")
 events:RegisterEvent("PLAYER_REGEN_ENABLED")
 events:SetScript("OnEvent", function(_, event, name)
 	if event == "ADDON_LOADED" then
-		if name == "Blizzard_GroupFinder_VanillaStyle" then SetupLFG(); SetupWho()
-		elseif name == "Blizzard_RecentAllies" then SetupRecentAllies() end
+		if name == "Blizzard_GroupFinder_VanillaStyle" then SetupLFG(); SetupWho() end
 	elseif event == "PLAYER_REGEN_DISABLED" then
-		if bound then ClearOverrideBindings(owner); bound = false end
+		if bound then ClearOverrideBindings(owner); bound = nil end
 	else
 		ns.UpdateIntegrations()
 	end
 end)
--- In case either Blizzard addon loaded first.
+-- In case the Blizzard addon loaded first.
 SetupLFG()
 SetupWho()
-SetupRecentAllies()

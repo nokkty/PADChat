@@ -128,20 +128,17 @@ local sent
 local emotes = {}
 function DoEmote(token) emotes[#emotes + 1] = token end
 function SendChatMessage(text, channel, _, target) sent = { text, channel, target } end
--- Blizzard's Recent Allies, the Whisper tab's only source.
-local alliesEnabled, alliesReady, allies = true, true, {}
-local function Ally(name, online, ...)
-	local interactions = {}
-	for i, timestamp in ipairs({ ... }) do interactions[i] = { timestamp = timestamp } end
-	return { characterData = { fullName = name }, stateData = { isOnline = online }, interactionData = { interactions = interactions } }
-end
-C_RecentAllies = {
-	IsSystemEnabled = function() return alliesEnabled end,
-	IsRecentAllyDataReady = function() return alliesReady end,
-	-- Restricted: an addon calling it gets "blocked from an action only available to the Blizzard UI".
-	TryRequestRecentAlliesData = function() error("ADDON_ACTION_BLOCKED: TryRequestRecentAlliesData") end,
-	GetRecentAllies = function() return allies end,
-}
+-- Group members, the Whisper tab's source after recent tells. Units are
+-- "party1".. or "raid1".., each { name, online }; the player is "player".
+local members = {}
+function GetNumGroupMembers() return #members end
+local function Member(unit) return members[tonumber(unit:match("%d+$") or "")] end
+function UnitExists(unit) return Member(unit) ~= nil end
+function UnitIsUnit(unit, other) return other == "player" and Member(unit) and Member(unit)[1] == "Me" end
+function UnitIsConnected(unit) return Member(unit)[2] end
+function GetUnitName(unit) return Member(unit)[1] end
+function UnitLevel() return 60 end
+function UnitClass() return "Mage", "MAGE" end
 function Ambiguate(name) return (name:gsub("%-Faerlina$", "")) end
 local ns = { BATTLEGROUNDS_ENABLED = true } -- keep the post-launch BG paths covered
 assert(loadfile("Messages.lua"))("PADChat", ns)
@@ -150,7 +147,7 @@ assert(loadfile("Integrations.lua"))("PADChat", ns)
 local shippedDefaults = ns.CopyMenu(ns.DefaultMenu)
 -- Exercise the existing editor and inheritance against a pre-upgrade menu;
 -- the new shipped defaults and upgrade are checked separately below.
-for _, key in ipairs(ns.CHOICES) do ns.DefaultMenu[key].variants = nil end
+for _, key in ipairs(ns.CHOICES) do ns.DefaultMenu[key].variants = { LFG = ns.DefaultMenu[key].variants.LFG } end
 for _, frame in ipairs(objects) do
 	if frame.events.ADDON_LOADED then frame.scripts.OnEvent(frame, "ADDON_LOADED", "PADChat") end
 end
@@ -264,24 +261,25 @@ PADChatOpen:SetAttribute("battlegrounds", true)
 Pad("B"); Released()
 Pad("LeftButton"); Pad("LeftButton"); Released()
 
--- Whisper sends the Say menu to the ally picked with the D-pad. Up/Down wrap,
+-- Whisper sends the Say menu to the player picked with the D-pad. Up/Down wrap,
 -- the list is newest first, and a list change mid-pick doesn't move it.
 combat = true
 Pad("LeftButton"); Pad("LB"); assert(PADChatWhispers:IsVisible())
-assert(Find(function(o) return o.kind == "Text" and o.text == "No allies online" end))
+assert(Find(function(o) return o.kind == "Text" and o.text == "No one to whisper" end))
 local beforeEmpty = sent
 Pad("A"); Pad("A"); assert(sent == beforeEmpty, "Nothing to whisper without a recipient"); Released()
-allies = { Ally("Bob-Grobbulus", true, 100), Ally("alice", true, 200), Ally("Cara", true, 300) }
+Event("CHAT_MSG_WHISPER", "hi", "Bob-Grobbulus"); Event("CHAT_MSG_WHISPER_INFORM", "yo", "alice"); Event("CHAT_MSG_WHISPER", "hey", "Cara")
 Pad("LeftButton"); assert(PADChatOpen:GetAttribute("menucontext") == "DEFAULT" and not PADChatWhispers:IsVisible())
 Pad("LB"); assert(ns.GetWhisperTarget() == "Cara")
 Pad("DOWN"); Pad("DOWN"); assert(ns.GetWhisperTarget() == "Bob-Grobbulus")
 Pad("DOWN"); assert(ns.GetWhisperTarget() == "Cara")
 Pad("UP"); assert(ns.GetWhisperTarget() == "Bob-Grobbulus")
-allies[#allies + 1] = Ally("Dan", true, 999)
+Event("CHAT_MSG_WHISPER", "sup", "Dan")
 assert(ns.GetWhisperTarget() == "Bob-Grobbulus")
 Pad("X"); Pad("A"); Pad("A")
 assert(sent[1] == "Hello" and sent[2] == "WHISPER" and sent[3] == "Bob-Grobbulus"); Released()
-assert(ns.GetWhispers()[1] == "Dan", "The next menu sees the newer ally")
+Event("CHAT_MSG_WHISPER_INFORM", "Hello", "Bob-Grobbulus") -- the client echoes a sent tell
+assert(ns.GetWhispers()[1] == "Bob-Grobbulus" and ns.GetWhispers()[2] == "Dan", "A tell moves its player to the front")
 Pad("LeftButton"); Pad("DOWN"); assert(PADChatOpen:GetAttribute("whisperindex") == 0, "Up/Down do nothing off the Whisper tab")
 Pad("B"); Released()
 combat = false
@@ -313,15 +311,24 @@ assert(overrides.PAD4 == nil and not lfgHint:IsVisible())
 LFGParentFrame:Show(); FireHooks(LFGBrowseFrame, "OnShow")
 assert(lfgHint:IsVisible() and lfgHint.alpha ~= 1 and overrides.PAD4 == nil, "Dimmed, unbound with nothing selected")
 SelectListing(7)
-assert(lfgHint.alpha == 1 and overrides.PAD4.target == "PADChatOpen" and overrides.PAD4.button == "WHISPER")
+assert(lfgHint.alpha == 1 and overrides.PAD4.target == "PADChatOpen" and overrides.PAD4.button == "LFG")
+-- A listing opens the LFG tab: role replies with the player's level and class.
 Pad(overrides.PAD4.button)
-assert(PADChatOpen:GetAttribute("menucontext") == "WHISPER" and ns.GetWhisperTarget() == "Kira")
+assert(PADChatOpen:GetAttribute("menucontext") == "LFG" and ns.GetWhisperTarget() == "Kira" and PADChatWhispers:IsVisible())
+assert(table.concat(LeafLabels(PADChatMenu), ",") == "A - 60 Mage DPS,X - 60 Mage HEALS,Y - 60 Mage TANK")
 assert(PADChatOpen.bindings.PAD4 == "Y" and PADChatOpen.bindings.PADDDOWN == "DOWN", "Quick chat takes Y and the D-pad while open")
-Pad("WHISPER"); assert(PADChatOpen:GetAttribute("open"), "Y in the open menu never re-opens it")
-Pad("A"); Pad("A"); assert(sent[1] == "Yes!" and sent[2] == "WHISPER" and sent[3] == "Kira"); Released()
+Pad("LFG"); assert(PADChatOpen:GetAttribute("open"), "Y in the open menu never re-opens it")
+Pad("RB"); assert(PADChatOpen:GetAttribute("menucontext") == "WHISPER")
+Pad("LB"); assert(PADChatOpen:GetAttribute("menucontext") == "LFG")
+Pad("LB"); assert(PADChatOpen:GetAttribute("menucontext") == "RAID")
+Pad("RB"); assert(PADChatOpen:GetAttribute("menucontext") == "LFG", "LFG joins the cycle of a menu it opened")
+Pad("X"); assert(sent[1] == "60 Mage HEALS" and sent[2] == "WHISPER" and sent[3] == "Kira"); Released()
+Pad("LeftButton"); Pad("LB"); assert(PADChatOpen:GetAttribute("menucontext") == "WHISPER")
+Pad("LB"); assert(PADChatOpen:GetAttribute("menucontext") == "RAID", "Other menus skip the LFG tab")
+Pad("B"); Released()
 assert(overrides.PAD4, "Y stays ready for the next listing")
-SelectListing(8); Pad("WHISPER"); Pad("DOWN")
-assert(ns.GetWhisperTarget() == "Dan", "The rest of the whisper list stays reachable")
+SelectListing(8); Pad("LFG"); Pad("DOWN")
+assert(ns.GetWhisperTarget() == "Bob-Grobbulus", "The rest of the whisper list stays reachable")
 Pad("B"); Released()
 SelectListing(nil); assert(overrides.PAD4 == nil)
 SelectListing(7)
@@ -335,47 +342,6 @@ assert(ns.DB.enhanceLFG == false and Toggle("enhanceLFG").label.text == "Off" an
 Click(Toggle("enhanceLFG")); assert(ns.DB.enhanceLFG and overrides.PAD4 and lfgHint:IsVisible())
 Click(Button("Done")); assert(Find(function(o) return o.label and o.label.text == "Done" end, true) == nil)
 LFGParentFrame:Hide(); FireHooks(LFGBrowseFrame, "OnHide"); assert(overrides.PAD4 == nil)
-
--- Enhance Recent Allies Window (on by default): the online ally under the
--- cursor gets a Y line at the bottom of its tooltip, and Y whispers them.
-assert(ns.DB.enhanceRecentAllies == true)
-local tooltipLines = {}
-local allyTooltip = { AddLine = function(_, text) tooltipLines[#tooltipLines + 1] = text end }
-RecentAlliesSocialCardMixin = {
-	BuildTooltip = function(self, tooltip) tooltip:AddLine(self.elementData.characterData.fullName) end,
-	HideTooltip = function() end,
-}
-Event("ADDON_LOADED", "Blizzard_RecentAllies")
-local function Card(name, online)
-	local card = CreateFrame("Button", nil, UIParent)
-	for key, fn in pairs(RecentAlliesSocialCardMixin) do card[key] = fn end -- what Mixin() does on creation
-	card.elementData = { characterData = { fullName = name }, stateData = { isOnline = online } }
-	return card
-end
-local function Hover(card) tooltipLines = {}; card:BuildTooltip(allyTooltip) end
-local bo, trixie = Card("Bo-Faerlina", true), Card("Trixie", false)
-Hover(bo)
-assert(tooltipLines[1] == "Bo-Faerlina" and tooltipLines[#tooltipLines]:find("Y|r Whisper with quick chat"), "Y line goes last")
-assert(overrides.PAD4 and overrides.PAD4.button == "WHISPER")
-combat = true
-Pad("WHISPER"); assert(PADChatOpen:GetAttribute("menucontext") == "WHISPER" and ns.GetWhisperTarget() == "Bo")
-Pad("A"); Pad("X"); assert(sent[1] == "No." and sent[2] == "WHISPER" and sent[3] == "Bo"); Released()
-combat = false
-bo:HideTooltip(); assert(overrides.PAD4 == nil, "Y is released when the cursor leaves the card")
-Hover(trixie); assert(#tooltipLines == 1 and overrides.PAD4 == nil, "Offline allies can't be whispered")
-trixie:HideTooltip()
-LFGParentFrame:Show(); FireHooks(LFGBrowseFrame, "OnShow"); SelectListing(7)
-Hover(bo); assert(ns.IntegrationTarget() == "Bo-Faerlina", "The card under the cursor wins over the LFG selection")
-bo:HideTooltip(); assert(ns.IntegrationTarget() == "Kira-Faerlina" and overrides.PAD4)
-LFGParentFrame:Hide(); FireHooks(LFGBrowseFrame, "OnHide")
-regenDisabling = true; Event("PLAYER_REGEN_DISABLED"); regenDisabling = false; combat = true
-Hover(bo); assert(#tooltipLines == 1 and overrides.PAD4 == nil, "No Y line in combat, when Y can't be claimed")
-bo:HideTooltip(); combat = false; Event("PLAYER_REGEN_ENABLED")
-Click(Button("Settings")); Click(Toggle("enhanceRecentAllies"))
-assert(ns.DB.enhanceRecentAllies == false and Toggle("enhanceRecentAllies").label.text == "Off")
-Hover(bo); assert(#tooltipLines == 1 and overrides.PAD4 == nil)
-bo:HideTooltip(); Click(Toggle("enhanceRecentAllies")); Click(Button("Done"))
-Hover(bo); assert(overrides.PAD4); bo:HideTooltip()
 
 -- The LFG window's Who tab (same setting): Y whispers the player whose row,
 -- or its invite button, the cursor is on, and a Y glyph sits on that row.
@@ -419,26 +385,25 @@ Leave(umbra); horse:OnEnter(); assert(overrides.PAD4 == nil and not whoHint:IsSh
 combat = false; Event("PLAYER_REGEN_ENABLED"); assert(overrides.PAD4 and whoHint:IsShown())
 Leave(horse); LFGParentFrame:Hide(); LFGBrowseFrame:Show(); ns.UpdateIntegrations()
 
--- The Whisper tab lists online Recent Allies by most recent interaction (at
--- most ten), and nothing while that system is off or loading. A picked player
--- still goes first.
-alliesReady = false
-allies = { Ally("Old-Faerlina", true, 100), Ally("Gone", false, 900), Ally("Quiet", true), Ally("Fresh", true, 500, 50) }
-for i = 1, 9 do allies[#allies + 1] = Ally("Filler" .. i, true, 10 + i) end
-Event("PLAYER_ENTERING_WORLD") -- never asks for the data itself (the stub raises if it does)
-assert(#ns.GetWhispers() == 0, "Nothing listed until the data arrives")
-Pad("LeftButton"); Pad("LB")
-assert(Find(function(o) return o.kind == "Text" and o.text == "Open Recent Allies to load" end), "Says how to load the list")
-Pad("B"); Released()
-alliesReady = true
+-- The Whisper tab lists recent tells, newest first, then online group members
+-- (not the player, not offline, no repeats), ten at most. Tells survive a
+-- reload. A picked player still goes first.
+wipe(ns.DB.recentTells)
+members = { { "Me", true }, { "Gone", false }, { "Pal-Faerlina", true }, { "Cara", true } }
+Event("CHAT_MSG_WHISPER", "hi", "Old-Faerlina"); Event("CHAT_MSG_WHISPER", "hi", "cara"); Event("CHAT_MSG_WHISPER_INFORM", "hi", "Fresh")
 local list = ns.GetWhispers()
-assert(list[1] == "Fresh" and list[2] == "Old" and list[3] == "Filler9" and #list == 10, "Newest first, ten at most")
-for _, name in ipairs(list) do assert(name ~= "Gone" and name ~= "Quiet", "No offline allies; no-interaction allies sort last") end
+assert(table.concat(list, ",") == "Fresh,cara,Old,Pal", "Tells first, then the rest of the group")
+for i = 1, 12 do Event("CHAT_MSG_WHISPER", "hi", "Filler" .. i) end
+list = ns.GetWhispers()
+assert(list[1] == "Filler12" and #list == 10 and #ns.DB.recentTells == 10, "Ten at most")
+Event("ADDON_LOADED", "PADChat"); assert(ns.GetWhispers()[1] == "Filler12", "Tells outlast a reload")
+wipe(ns.DB.recentTells)
+assert(table.concat(ns.GetWhispers(), ",") == "Pal,Cara", "A group alone fills the list")
 combat = true
-Pad("LeftButton"); Pad("LB"); assert(ns.GetWhisperTarget() == "Fresh"); Pad("DOWN")
-allies[#allies + 1] = Ally("Newest", true, 999)
-assert(ns.GetWhisperTarget() == "Old", "An open menu keeps its list")
-Pad("A"); Pad("A"); assert(sent[3] == "Old"); Released()
+Pad("LeftButton"); Pad("LB"); assert(ns.GetWhisperTarget() == "Pal"); Pad("DOWN")
+Event("CHAT_MSG_WHISPER", "hi", "Newest")
+assert(ns.GetWhisperTarget() == "Cara", "An open menu keeps its list")
+Pad("A"); Pad("A"); assert(sent[3] == "Cara"); Released()
 assert(ns.GetWhispers()[1] == "Newest")
 combat = false
 LFGBrowseFrame:Show(); LFGParentFrame:Show(); FireHooks(LFGBrowseFrame, "OnShow"); SelectListing(7)
@@ -446,12 +411,11 @@ Pad("WHISPER"); assert(ns.GetWhisperTarget() == "Kira" and ns.GetWhispers()[2] =
 Pad("B"); Released()
 Pad("LeftButton"); Pad("LB"); assert(ns.GetWhisperTarget() == "Newest", "A picked player only heads that one menu")
 Pad("B"); Released()
-alliesEnabled = false
-assert(#ns.GetWhispers() == 0, "System off: nothing listed")
+wipe(ns.DB.recentTells); members = {}
+assert(#ns.GetWhispers() == 0, "Nothing listed")
 Pad("WHISPER"); assert(ns.GetWhisperTarget() == "Kira" and #ns.GetWhispers() == 1, "A picked player can still be whispered")
 Pad("B"); Released()
 SelectListing(nil); LFGParentFrame:Hide(); FireHooks(LFGBrowseFrame, "OnHide")
-alliesEnabled = true
 
 -- Auto-selection distinguishes solo, parties, normal raids, PvE instances,
 -- arenas, and battlegrounds. The chosen tab overrides old per-message channels.
@@ -686,7 +650,7 @@ view:Hide()
 ns.DefaultMenu = shippedDefaults
 PADChatDB = nil; Event("ADDON_LOADED", "PADChat")
 ns.MenuChanged()
-assert(ns.DB.version == 7 and ns.savedLoaded == false)
+assert(ns.DB.version == 8 and ns.savedLoaded == false)
 assert(ns.ResolveNode(ns.GetMenu(), "GROUP").X.A.A.emote == "OOM")
 Group("PARTY"); combat = true
 Pad("LeftButton"); Pad("X"); Pad("A")
@@ -762,9 +726,9 @@ for _, key in ipairs(ns.CHOICES) do legacyMenu[key].variants = nil end
 legacyMenu.X.variants = { GROUP = { label = "My group", A = { label = "Custom", text = "Custom!" } }, RAID = false }
 legacyMenu.Y.A.text = "My help"
 PADChatDB = { menu = legacyMenu, compact = true, version = 2 }; Event("ADDON_LOADED", "PADChat")
-assert(ns.DB.version == 7 and ns.DB.compact)
+assert(ns.DB.version == 8 and ns.DB.compact)
 assert(ns.DB.menu.X.variants.GROUP.A.text == "Custom!" and ns.DB.menu.X.variants.RAID == false)
-assert(ns.DB.menu.Y.A.text == "My help" and ns.DB.menu.Y.variants == nil)
+assert(ns.DB.menu.Y.A.text == "My help" and ns.DB.menu.Y.variants.GROUP == nil and ns.DB.menu.Y.variants.RAID == nil)
 assert(ns.DB.menu.A.variants.RAID.A.text == "2-3 inc {location}")
 ns.DB.menu.A.variants.RAID.A.text = "Edited incoming"
 Event("ADDON_LOADED", "PADChat"); assert(ns.DB.menu.A.variants.RAID.A.text == "Edited incoming")
@@ -777,7 +741,7 @@ oldGreet.X.A.A = { label = "Hello", text = "Well met!", chat = "SAY" }
 oldGreet.X.A.X = { label = "Goodbye", text = "See ya!", chat = "SAY" }
 oldGreet.X.A.Y = { label = "Wave", text = "waves.", chat = "SAY" }
 PADChatDB = { menu = oldGreet, compact = false, version = 4 }; Event("ADDON_LOADED", "PADChat")
-assert(ns.DB.version == 7 and ns.DB.menu.X.A.A.text == "Hello" and ns.DB.menu.X.A.X.text == "See ya!")
+assert(ns.DB.version == 8 and ns.DB.menu.X.A.A.text == "Hello" and ns.DB.menu.X.A.X.text == "See ya!")
 assert(ns.DB.menu.X.A.Y.text == nil and ns.DB.menu.X.A.Y.emote == "WAVE" and ns.DB.menu.X.A.Y ~= shippedDefaults.X.A.Y)
 
 -- Wave can't reach a whisper target, so the Whisper tab swaps it for a thank
@@ -785,7 +749,7 @@ assert(ns.DB.menu.X.A.Y.text == nil and ns.DB.menu.X.A.Y.emote == "WAVE" and ns.
 local preWhisper = ns.CopyMenu(shippedDefaults)
 preWhisper.X.A.X.variants, preWhisper.X.A.Y.variants = nil, nil
 PADChatDB = { menu = preWhisper, compact = false, version = 5 }; Event("ADDON_LOADED", "PADChat")
-assert(ns.DB.version == 7 and ns.DB.menu.X.A.Y.variants.WHISPER.text == "Thanks for the group!")
+assert(ns.DB.version == 8 and ns.DB.menu.X.A.Y.variants.WHISPER.text == "Thanks for the group!")
 assert(ns.DB.menu.X.A.X.variants.WHISPER.text == "Farewell" and ns.DB.menu.X.A.X.variants.WHISPER.emote == nil)
 assert(ns.DB.menu.X.A.Y.variants ~= shippedDefaults.X.A.Y.variants)
 local editedWave = ns.CopyMenu(shippedDefaults)
@@ -793,11 +757,19 @@ editedWave.X.A.X = { label = "Goodbye", text = "Later!", emote = "WAVE" }
 editedWave.X.A.Y = { label = "Bow", emote = "BOW" }
 PADChatDB = { menu = editedWave, compact = false, version = 5 }; Event("ADDON_LOADED", "PADChat")
 assert(ns.DB.menu.X.A.X.variants == nil and ns.DB.menu.X.A.Y.variants == nil)
+-- Saves from before the LFG tab gain its options, even in a removed slot.
+local preLFG = ns.CopyMenu(shippedDefaults)
+for _, key in ipairs(ns.CHOICES) do preLFG[key].variants.LFG = nil end
+preLFG.Y = nil
+PADChatDB = { menu = preLFG, compact = false, version = 7 }; Event("ADDON_LOADED", "PADChat")
+local lfgMenu = ns.ResolveNode(ns.GetMenu(), "LFG")
+assert(lfgMenu.A.text == "{LEVEL} {CLASS} DPS" and lfgMenu.Y.text == "{LEVEL} {CLASS} TANK")
+assert(ns.ResolveNode(ns.GetMenu(), "DEFAULT").Y == nil, "A removed slot stays removed on other tabs")
 ns.ResetToDefaults(); ns.DB.compact = false
 assert(ns.ResolveNode(ns.GetMenu(), "DEFAULT").X.A.Y.emote == "WAVE")
 assert(ns.ResolveNode(ns.GetMenu(), "WHISPER").X.A.Y.text == "Thanks for the group!")
 assert(ns.ResolveNode(ns.GetMenu(), "WHISPER").X.A.A.text == "Hello", "Whisper inherits Say, not Group")
-Group("PARTY"); allies = { Ally("Erin", true, 1) }; combat = true
+members = { { "Erin", true } }; Group("PARTY"); combat = true
 Pad("LeftButton"); Pad("LB"); Pad("LB"); Pad("X"); Pad("A")
 assert(table.concat(LeafLabels(PADChatMenu), ",") == "XAA - Hello,XAX - Goodbye,XAY - Thanks for the group")
 local emotesBefore = #emotes
@@ -872,7 +844,7 @@ versionThree.X.variants.RAID.A.text = "Custom defense."
 versionThree.Y.variants.GROUP = nil
 PADChatDB = { menu = versionThree, compact = false, version = 3 }
 Event("ADDON_LOADED", "PADChat")
-assert(ns.DB.version == 7 and ns.DB.menu.A.variants.RAID.battlegrounds[489].A.text == "Flag going ramp!")
+assert(ns.DB.version == 8 and ns.DB.menu.A.variants.RAID.battlegrounds[489].A.text == "Flag going ramp!")
 assert(ns.DB.menu.X.variants.RAID.A.text == "Custom defense." and ns.DB.menu.X.variants.RAID.battlegrounds == nil)
 assert(ns.DB.menu.Y.variants.GROUP == nil)
 ns.DB.menu.A.variants.RAID.battlegrounds[489].A.text = "Custom flag call!"
