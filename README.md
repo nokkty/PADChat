@@ -69,6 +69,17 @@ I've played World of Warcraft with a controller for many years, and communicatin
 | `Media/` | Icon and logo assets |
 | `tests/` | Tests |
 
+## Changelog
+
+### 0.3.0
+
+- New **Whisper** tab: sends your Say messages privately to a player picked with **D-pad Up / Down**.
+- The whisper list is built by PAD Chat: people you've recently whispered or been whispered by (kept across `/reload`), then your online group members.
+- New **LFG** tab: press **Y** on a selected listing in the Looking For Group window to whisper its leader a role reply (`{LEVEL} {CLASS} DPS`, `HEALS` or `TANK`).
+- Press **Y** on a player in the Looking For Group window's **Who** tab to whisper them.
+- New `{LEVEL}` and `{CLASS}` message placeholders.
+- Removed the Recent Allies window integration.
+
 ## Coming soon
 
 Location-based callouts in Battlegrounds (for example, "Incoming Mine!" or "Incoming BS!"). I'll release this once Battlegrounds are in-game and I can test it.
