@@ -11,8 +11,10 @@ I've played World of Warcraft with a controller for many years, and communicatin
 ## Features
 
 - **Button combos:** Navigate chat menus up to 4 presses deep using the face buttons (**A / X / Y** or **Cross / Square / Triangle**).
-- **Context tabs:** Tap **LB / RB** (bumpers) to switch between **Say**, **Group**, and **Battleground** channels.
-- **Built-in editor:** Customize messages, categories, emotes, and `{location}` placeholders from the minimap button.
+- **Context tabs:** Tap **LB / RB** (bumpers) to switch between **Whisper**, **Say**, **Group**, and **Battleground** channels. Say is always the tab you start on.
+- **Whispers:** The Whisper tab sends your Say messages privately. A list of the people you've recently whispered or been whispered by (most recent first), followed by your online group members, appears beside the overlay; pick one with **D-pad Up / Down**.
+- **Looking For Group integration:** Select a group or player in the Looking For Group window and press **Y** to whisper them with quick chat. It opens on a special **LFG** tab with role replies (`{LEVEL} {CLASS} DPS`, `HEALS` or `TANK`, for example "60 Mage HEALS"); LB / RB still reach the other tabs. A **Y** prompt appears beside **Send Message**. In the window's **Who** tab, move the cursor onto a player and press **Y**; the row shows the **Y** prompt. Turn both off under **Settings → Integrations → Enhance LFG Window**.
+- **Built-in editor:** Customize messages, categories, emotes, and `{location}`, `{LEVEL}` and `{CLASS}` placeholders from the minimap button.
 - **Normal and compact modes:** Pick the overlay size that suits your UI.
 
 ## Screenshots
@@ -49,7 +51,10 @@ I've played World of Warcraft with a controller for many years, and communicatin
 | **Action bar macro (`PADChat`)** | Open quick chat |
 | **A / X / Y** *(Cross / Square / Triangle)* | Select a category or message |
 | **B** *(Circle)* | Cancel / close the menu |
-| **LB / RB** *(left / right bumper)* | Switch tabs (Say / Group / BG) |
+| **LB / RB** *(left / right bumper)* | Switch tabs (Whisper / Say / Group / BG) |
+| **D-pad Up / Down** *(Whisper and LFG tabs only)* | Choose who to whisper |
+| **Y** *(Looking For Group window, listing selected)* | Whisper that listing's leader from the LFG tab |
+| **Y** *(Looking For Group Who tab, on a player)* | Whisper that player |
 
 ## Project layout
 
@@ -58,10 +63,22 @@ I've played World of Warcraft with a controller for many years, and communicatin
 | `PADChat.toc` | Addon manifest |
 | `PADChat.lua` | Core overlay, input handling, and chat sending |
 | `Messages.lua` | Default message tree |
+| `Integrations.lua` | Looking For Group window enhancements |
 | `Editor.lua` | In-game message and settings editor |
 | `MinimapButton.lua` | Minimap button |
 | `Media/` | Icon and logo assets |
 | `tests/` | Tests |
+
+## Changelog
+
+### 0.3.0
+
+- New **Whisper** tab: sends your Say messages privately to a player picked with **D-pad Up / Down**.
+- The whisper list is built by PAD Chat: people you've recently whispered or been whispered by (kept across `/reload`), then your online group members.
+- New **LFG** tab: press **Y** on a selected listing in the Looking For Group window to whisper its leader a role reply (`{LEVEL} {CLASS} DPS`, `HEALS` or `TANK`).
+- Press **Y** on a player in the Looking For Group window's **Who** tab to whisper them.
+- New `{LEVEL}` and `{CLASS}` message placeholders.
+- Removed the Recent Allies window integration.
 
 ## Coming soon
 

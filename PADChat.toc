@@ -1,11 +1,12 @@
 ## Interface: 16001
 ## Title: PAD Chat
-## Notes: Tribes 2 style quick chat for gamepads. A/X/Y selects messages, LB/RB switches Say/Group tabs, B cancels.
-## Version: 0.2.0
+## Notes: Tribes 2 style quick chat for gamepads. A/X/Y selects messages, LB/RB switches Whisper/Say/Group tabs, D-pad Up/Down picks who to whisper from recent tells and your group, Y on an LFG listing opens the LFG tab with role replies, B cancels.
+## Version: 0.3.0
 ## SavedVariables: PADChatDB
 ## IconTexture: Interface\AddOns\PADChat\Media\Gamepad
 
 Messages.lua
 PADChat.lua
+Integrations.lua
 Editor.lua
 MinimapButton.lua

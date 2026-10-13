@@ -7,11 +7,13 @@
 -- category that opens the next level, up to four presses deep, so "X then Y
 -- then A" works the same as Tribes 2's "V G Y".
 --
--- The selected Say, Group or Battleground tab determines where messages go.
--- `variants.GROUP` and `variants.RAID` replace options on the Group and
--- Battleground tabs; Battleground inherits Group, and false clears a slot.
+-- The selected Whisper, Say, Group or Battleground tab determines where messages
+-- go. `variants.WHISPER`, `variants.GROUP` and `variants.RAID` replace options on
+-- those tabs; Whisper inherits Say, Battleground inherits Group, and false
+-- clears a slot.
 -- A message sends chat text, an `emote` token, or both: "Wave" is emote-only
--- and says nothing. Chat text can hold a {location} placeholder.
+-- and says nothing. Chat text can hold {location}, {LEVEL} and {CLASS}
+-- placeholders. The LFG tab (`variants.LFG`) inherits Whisper.
 -- `battlegrounds[instanceID]` supplies a menu for a specific battleground.
 -- On a PlayStation pad A = Cross, X = Square, Y = Triangle, B = Circle.
 
@@ -26,8 +28,12 @@ ns.DefaultMenu = {
 	X = { label = "Social",
 		A = { label = "Greet",
 			A = { label = "Hello",   text = "Hello" },
-			X = { label = "Goodbye", text = "Farewell", emote = "WAVE" },
-			Y = { label = "Wave",    emote = "WAVE" },
+			-- An emote only reaches players nearby, never the whisper target, so
+			-- the Whisper tab sends text alone.
+			X = { label = "Goodbye", text = "Farewell", emote = "WAVE",
+				variants = { WHISPER = { label = "Goodbye", text = "Farewell" } } },
+			Y = { label = "Wave",    emote = "WAVE",
+				variants = { WHISPER = { label = "Thanks for the group", text = "Thanks for the group!" } } },
 		},
 		X = { label = "Group",
 			A = { label = "Invite please!",  text = "Invite please!" },
@@ -80,6 +86,11 @@ ns.DefaultMenu.A.variants = {
 		Y = { label = "Big INC {location}!", text = "Big INC {location}!" },
 	},
 }
+
+-- The LFG tab answers a Looking For Group listing with the player's role.
+ns.DefaultMenu.A.variants.LFG = { text = "{LEVEL} {CLASS} DPS" }
+ns.DefaultMenu.X.variants.LFG = { text = "{LEVEL} {CLASS} HEALS" }
+ns.DefaultMenu.Y.variants.LFG = { text = "{LEVEL} {CLASS} TANK" }
 
 -- These replacements keep the same button paths as the generic BG menu.
 ns.DefaultMenu.A.variants.RAID.battlegrounds = {
