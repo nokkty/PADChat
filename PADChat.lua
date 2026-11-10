@@ -64,12 +64,12 @@ ns.CHOICES, ns.KEY_COLOR, ns.KEY_LABEL, ns.KEY_PREFIX, ns.Print = CHOICES, KEY_C
 -- Battlegrounds aren't in the WoW: Forever beta, so the Battleground tab and
 -- zone detection stay off until launch. Flip to true to re-enable them all.
 ns.BATTLEGROUNDS_ENABLED = ns.BATTLEGROUNDS_ENABLED or false
--- Tabs, left to right. Whisper and Group both inherit Say's options; Say stays
+-- Tabs, left to right. Whisper, Guild and Group all inherit Say's options; Say stays
 -- the tab the menu opens on. LFG whispers like Whisper (and inherits it), but
 -- only shows when Y on a Looking For Group listing opened the menu.
-ns.CONTEXTS = { "LFG", "WHISPER", "DEFAULT", "GROUP", ns.BATTLEGROUNDS_ENABLED and "RAID" or nil }
+ns.CONTEXTS = { "LFG", "WHISPER", "DEFAULT", "GUILD", "GROUP", ns.BATTLEGROUNDS_ENABLED and "RAID" or nil }
 -- Retain the saved RAID variant key for existing menus; it is now the BG tab.
-ns.CONTEXT_LABELS = { LFG = "LFG", WHISPER = "Whisper", DEFAULT = "Say", GROUP = "Group", RAID = "Battleground" }
+ns.CONTEXT_LABELS = { LFG = "LFG", WHISPER = "Whisper", DEFAULT = "Say", GUILD = "Guild", GROUP = "Group", RAID = "Battleground" }
 ns.MAX_WHISPERS = 10
 ns.MAX_DEPTH = 4 -- presses per message, counting the last one
 
@@ -147,6 +147,8 @@ function ns.PickNode(node, context)
 		elseif context == "WHISPER" or context == "LFG" then
 			if variants.WHISPER ~= nil then condition = "WHISPER" end
 		elseif context == "RAID" and variants.RAID ~= nil then condition = "RAID"
+		elseif context == "GUILD" then
+			if variants.GUILD ~= nil then condition = "GUILD" end
 		elseif context ~= "DEFAULT" and variants.GROUP ~= nil then condition = "GROUP" end
 	end
 	if condition then node = variants[condition] end
@@ -179,6 +181,7 @@ end
 function ns.GetChannel(chat)
 	if not chat or chat == "SAY" or chat == "DEFAULT" then return "SAY" end
 	if chat == "WHISPER" or chat == "LFG" then return ns.GetWhisperTarget() and "WHISPER" or nil end
+	if chat == "GUILD" then return IsInGuild() and "GUILD" or nil end
 	local instance = IsInGroup(LE_PARTY_CATEGORY_INSTANCE)
 	if chat == "GROUP" then
 		if instance then return "INSTANCE_CHAT" end
@@ -410,11 +413,11 @@ open:SetAttribute("_onclick", [[
 		local context = self:GetAttribute("menucontext") or "DEFAULT"
 		local first = self:GetAttribute("lfgopen") and "LFG" or "WHISPER"
 		if button == "RB" then
-			context = context == "LFG" and "WHISPER" or context == "WHISPER" and "DEFAULT" or context == "DEFAULT" and "GROUP" or context == "GROUP" and "RAID" or first
+			context = context == "LFG" and "WHISPER" or context == "WHISPER" and "DEFAULT" or context == "DEFAULT" and "GUILD" or context == "GUILD" and "GROUP" or context == "GROUP" and "RAID" or first
 		else
 			if context == "WHISPER" and first == "LFG" then context = "LFG"
 			elseif context == "WHISPER" or context == "LFG" then context = "RAID"
-			else context = context == "RAID" and "GROUP" or context == "GROUP" and "DEFAULT" or "WHISPER" end
+			else context = context == "RAID" and "GROUP" or context == "GROUP" and "GUILD" or context == "GUILD" and "DEFAULT" or "WHISPER" end
 		end
 		if context == "RAID" and not self:GetAttribute("battlegrounds") then
 			context = button == "RB" and first or "GROUP"
@@ -619,7 +622,7 @@ local function SendNode(node, context)
 	if HasText(node) then
 		local chatType = ns.GetChannel(context)
 		if not chatType then
-			Print((context == "WHISPER" or context == "LFG") and "No one to whisper." or "Join a " .. (context == "RAID" and "battleground" or "group") .. " to send this message.")
+			Print((context == "WHISPER" or context == "LFG") and "No one to whisper." or "Join a " .. (context == "RAID" and "battleground" or context == "GUILD" and "guild" or "group") .. " to send this message.")
 			return
 		end
 		local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
@@ -682,7 +685,7 @@ function ns.CreateMenuView(parent, name)
 	local tabs = {}
 	for _, context in ipairs(ns.CONTEXTS) do
 		local tab = CreateFrame("Frame", nil, menu)
-		tab:SetSize(({ LFG = 36, WHISPER = 56, DEFAULT = 40, GROUP = 48, RAID = 82 })[context], 24)
+		tab:SetSize(({ LFG = 36, WHISPER = 56, DEFAULT = 40, GUILD = 40, GROUP = 48, RAID = 82 })[context], 24)
 		tab.bg = tab:CreateTexture(nil, "BACKGROUND")
 		tab.bg:SetAllPoints()
 		tab.label = tab:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -751,7 +754,7 @@ function ns.CreateMenuView(parent, name)
 		path = path or ""
 		context = context or "DEFAULT"
 		title:SetText("Quick Chat")
-		-- ponytail: all five tabs overflow the HUD by ~20px once battlegrounds launch; narrow the tabs then.
+		-- ponytail: with the Guild tab, the five visible tabs overflow the HUD by ~40px once battlegrounds launch; narrow the tabs then.
 		local tabX = 14
 		for _, tabContext in ipairs(ns.CONTEXTS) do
 			local tab = tabs[tabContext]
