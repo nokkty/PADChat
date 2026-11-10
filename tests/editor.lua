@@ -29,7 +29,7 @@ local function Object(kind, name, parent, template)
 	return obj
 end
 for _, method in ipairs({ "SetFrameStrata", "SetToplevel", "SetMovable", "SetClampedToScreen", "EnableMouse",
-	"EnableMouseWheel", "EnableKeyboard", "RegisterForDrag", "RegisterForClicks", "SetAllPoints", "SetTextColor",
+	"EnableMouseWheel", "EnableKeyboard", "EnableGamePadButton", "RegisterForDrag", "RegisterForClicks", "SetAllPoints", "SetTextColor",
 	"SetJustifyH", "SetColorTexture", "SetTexture", "AddMaskTexture", "SetFontObject", "SetTextInsets",
 	"SetAutoFocus", "SetMaxLetters", "SetScale", "SetScrollChild", "SetHighlightTexture", "SetOwner", "AddLine", "SetVerticalScroll", "StartMoving", "StopMovingOrSizing" }) do
 	methods[method] = function() end
@@ -256,7 +256,7 @@ Pad("RB"); Released()
 Pad("LeftButton")
 assert(PADChatOpen:GetAttribute("menucontext") == "DEFAULT")
 assert(PADChatOpen.bindings.PADLSHOULDER == "LB" and PADChatOpen.bindings.PADRSHOULDER == "RB")
-assert(PADChatOpen.bindings["CTRL-PAD1"] == "A" and PADChatOpen.bindings["ALT-CTRL-SHIFT-PADRSHOULDER"] == "RB")
+assert(PADChatOpen.bindings["CTRL-PAD1"] == "LTA" and PADChatOpen.bindings["PAD1"] == "A" and PADChatOpen.bindings["CTRL-PAD2"] == "B" and PADChatOpen.bindings["ALT-CTRL-SHIFT-PADRSHOULDER"] == "RB")
 Pad("X"); Pad("A"); Pad("RB")
 assert(PADChatOpen:GetAttribute("menucontext") == "GROUP" and PADChatOpen:GetAttribute("path") == "")
 Pad("RB"); assert(PADChatOpen:GetAttribute("menucontext") == "RAID")
@@ -907,6 +907,41 @@ for _, held in ipairs({ {}, { "LT" }, { "RT" }, { "LT", "RT" } }) do
 		for _, name in ipairs(held) do Trigger(name, false) end
 		assert(sent[1] == "Sent " .. ns.CHOICES[slot], "Each combination is its own slot"); Released()
 	end
+end
+
+-- A CTRL-emulating LT (as ConsolePort does) arrives as CTRL-bound A/X/Y, i.e. "LTA".
+for face, expected in pairs({ A = "Sent C", X = "Sent D", Y = "Sent E" }) do
+	Pad("LeftButton"); Pad("LT" .. face); assert(sent[1] == expected, "CTRL-emulated LT selects the LT slot"); Released()
+end
+Pad("LeftButton"); Trigger("RT", true); Pad("LTA"); Trigger("RT", false)
+assert(sent[1] == "Sent I", "CTRL-emulated LT plus RT is LT+RT"); Released()
+
+-- Modifiers settings: defaults keep LT = CTRL, and both triggers can be re-keyed or emulated.
+assert(ns.DB.modifiers.LT.emulate == "CTRL" and ns.DB.modifiers.RT.emulate == nil and ns.DB.modifiers.RT.key == "PADRTRIGGER")
+do
+	local function Bindings() Pad("LeftButton"); local b = PADChatOpen.bindings; Pad("LeftButton"); Released(); return b end
+	Click(Button("Settings"))
+	Click(Find(function(o) return o.kind == "Button" and o.modifier == "emulate" and o.trigger == "LT" end)) -- CTRL -> SHIFT
+	assert(ns.DB.modifiers.LT.emulate == "SHIFT" and PADChatOpen:GetAttribute("emulate-LT") == "SHIFT")
+	Pad("LeftButton"); assert(PADChatOpen.bindings["SHIFT-PAD1"] == "LTA" and PADChatOpen.bindings["CTRL-PAD1"] == "A"); Pad("B"); Released()
+	Click(Find(function(o) return o.kind == "Button" and o.modifier == "emulate" and o.trigger == "RT" end)) -- none -> CTRL
+	Pad("LeftButton"); assert(PADChatOpen.bindings["CTRL-PAD1"] == "RTA" and PADChatOpen.bindings["CTRL-SHIFT-PAD1"] == "LTRTA"); Pad("RTA")
+	Released()
+	local keyButton = Find(function(o) return o.kind == "Button" and o.modifier == "key" and o.trigger == "RT" end)
+	Click(keyButton); assert(keyButton.label.text == "Press a button...")
+	keyButton.scripts.OnKeyDown(keyButton, "LSHIFT"); assert(ns.DB.modifiers.RT.key == "PADRTRIGGER", "Modifier keys are ignored")
+	keyButton.scripts.OnGamePadButtonDown(keyButton, "PADPADDLE1")
+	assert(ns.DB.modifiers.RT.key == "PADPADDLE1" and PADChatOpen:GetAttribute("key-RT") == "PADPADDLE1" and keyButton.label.text == "PADPADDLE1")
+	Click(keyButton); keyButton.scripts.OnKeyDown(keyButton, "ESCAPE"); assert(ns.DB.modifiers.RT.key == "PADPADDLE1", "Escape cancels")
+	-- Changes wait for combat to end and quick chat to close.
+	combat = true
+	Click(Find(function(o) return o.kind == "Button" and o.modifier == "emulate" and o.trigger == "RT" end))
+	assert(ns.IsPublishPending() and PADChatOpen:GetAttribute("emulate-RT") == "CTRL")
+	combat = false; Event("PLAYER_REGEN_ENABLED")
+	assert(not ns.IsPublishPending() and PADChatOpen:GetAttribute("emulate-RT") == "SHIFT")
+	Click(Button("Reset modifiers"))
+	assert(ns.DB.modifiers.LT.emulate == "CTRL" and ns.DB.modifiers.RT.key == "PADRTRIGGER" and PADChatOpen:GetAttribute("emulate-RT") == nil)
+	Click(Button("Done"))
 end
 
 LoadMenu({ A = { label = "Plain slot", text = "Sent A" },

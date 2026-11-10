@@ -370,6 +370,9 @@ end
 -- LeftButton = the macro (toggle); A/X/Y/B/LB/RB/UP/DOWN = override-bound pad
 -- buttons, which click this same button with the letter as the mouse button.
 -- LT/RT click their own buttons above, and A/X/Y become a slot from SLOTS.
+-- A trigger emulating a modifier (ConsolePort turns LT into CTRL) never reaches
+-- PADChatLT/RT. The Modifiers setting names that modifier in emulate-LT/RT, and
+-- A/X/Y bound with it click as LTA, RTA, LTRTA and so on, counting as held.
 -- WHISPER / LFG = Y in an integrated Blizzard window (Integrations.lua), which
 -- opens straight onto the Whisper or LFG tab with that window's player picked.
 -- The LFG tab only joins the LB/RB cycle of a menu it opened.
@@ -394,8 +397,15 @@ open:SetAttribute("_onclick", [[
 			self:SetAttribute("heldRT", nil)
 			for modifier in ("NONE SHIFT- CTRL- ALT- CTRL-SHIFT- ALT-SHIFT- ALT-CTRL- ALT-CTRL-SHIFT-"):gmatch("%S+") do
 				local prefix = modifier == "NONE" and "" or modifier
+				local ltEmulated = self:GetAttribute("emulate-LT")
+				local rtEmulated = self:GetAttribute("emulate-RT")
 				for key in (button ~= "LeftButton" and "A X Y B LB RB UP DOWN" or "A X Y B LB RB"):gmatch("%S+") do
-					self:SetBindingClick(true, prefix .. self:GetAttribute("key-" .. key), "PADChatOpen", key)
+					local name = key
+					if key:len() == 1 and key ~= "B" then
+						if rtEmulated and modifier:find(rtEmulated) then name = "RT" .. name end
+						if ltEmulated and modifier:find(ltEmulated) then name = "LT" .. name end
+					end
+					self:SetBindingClick(true, prefix .. self:GetAttribute("key-" .. key), "PADChatOpen", name)
 				end
 				for key in ("LT RT"):gmatch("%S+") do
 					self:SetBindingClick(true, prefix .. self:GetAttribute("key-" .. key), "PADChat" .. key, key)
@@ -450,8 +460,16 @@ open:SetAttribute("_onclick", [[
 		return
 	end
 
-	local slot = (self:GetAttribute("heldLT") and 3 or 0) + (self:GetAttribute("heldRT") and 6 or 0)
-		+ (button == "A" and 1 or button == "X" and 2 or 3)
+	local face = button
+	local chord = self:GetAttribute("heldLT")
+	local rtChord = self:GetAttribute("heldRT")
+	if button:len() > 1 then
+		face = button:sub(-1)
+		if button:find("LT") then chord = 1 end
+		if button:find("RT") then rtChord = 1 end
+	end
+	local slot = (chord and 3 or 0) + (rtChord and 6 or 0)
+		+ (face == "A" and 1 or face == "X" and 2 or 3)
 	local path = (self:GetAttribute("path") or "") .. self:GetAttribute("slots"):sub(slot, slot)
 	local context = self:GetAttribute("menucontext") or "DEFAULT"
 	local shape = context == "RAID" and self:GetAttribute("menuprofile") == "WSG" and "WSG" or context
@@ -489,8 +507,26 @@ UpdateContextDriver()
 local publishedPaths = {}
 local menuDirty = true
 
+-- The Modifiers setting: which pad button acts as LT/RT and whether a controller
+-- add-on turns it into CTRL, SHIFT or ALT. Published like the menu, out of combat
+-- and while quick chat is closed.
+local modifiersDirty = true
+local EMULATED = { CTRL = true, SHIFT = true, ALT = true }
+local function PublishModifiers()
+	local saved = ns.DB and ns.DB.modifiers or ns.DefaultModifiers
+	for _, trigger in ipairs({ "LT", "RT" }) do
+		local entry = type(saved[trigger]) == "table" and saved[trigger] or ns.DefaultModifiers[trigger]
+		local key = type(entry.key) == "string" and entry.key ~= "" and entry.key or KEYS[trigger]
+		open:SetAttribute("key-" .. trigger, key)
+		open:SetAttribute("emulate-" .. trigger, EMULATED[entry.emulate] and entry.emulate or nil)
+	end
+	modifiersDirty = false
+end
+
 local function PublishMenu()
-	if not menuDirty or InCombatLockdown() or open:GetAttribute("open") then return end
+	if InCombatLockdown() or open:GetAttribute("open") then return end
+	if modifiersDirty then PublishModifiers() end
+	if not menuDirty then return end
 	local snapshots = {}
 	for path in pairs(publishedPaths) do
 		open:SetAttribute("node-" .. path, nil)
@@ -525,7 +561,15 @@ function ns.MenuChanged()
 	PublishMenu()
 end
 
-function ns.IsPublishPending() return menuDirty end
+function ns.IsPublishPending() return menuDirty or modifiersDirty end
+
+ns.DefaultModifiers = { LT = { key = KEYS.LT, emulate = "CTRL" }, RT = { key = KEYS.RT } }
+
+-- Called by the editor after every change to the Modifiers setting.
+function ns.ModifiersChanged()
+	modifiersDirty = true
+	PublishMenu()
+end
 
 function ns.ResetToDefaults()
 	ns.DB.menu = DeepCopy(ns.DefaultMenu)
@@ -999,6 +1043,8 @@ events:SetScript("OnEvent", function(_, event, arg1)
 		ns.DB = PADChatDB
 		if type(ns.DB.compact) ~= "boolean" then ns.DB.compact = false end
 		if type(ns.DB.enhanceLFG) ~= "boolean" then ns.DB.enhanceLFG = true end
+		if type(ns.DB.modifiers) ~= "table" then ns.DB.modifiers = DeepCopy(ns.DefaultModifiers) end
+		modifiersDirty = true
 		ns.DB.enhanceRecentAllies = nil -- setting from before the integration was removed
 		if type(ns.DB.recentTells) ~= "table" then ns.DB.recentTells = {} end
 		if type(ns.DB.menu) ~= "table" then ns.DB.menu = DeepCopy(ns.DefaultMenu) end

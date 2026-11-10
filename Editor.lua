@@ -312,6 +312,56 @@ local lfgToggle = Button(settings, "", settings:GetWidth() - 90, -80, 76, functi
 	ns.UpdateIntegrations(); Refresh(true)
 end)
 lfgToggle.setting = "enhanceLFG"
+
+-- Modifiers: the pad button that acts as LT or RT while quick chat is open, and
+-- the modifier a controller add-on may turn it into (ConsolePort: LT = CTRL).
+local modifiersTitle = Text(settings, "GameFontNormal", 14, -160, settings:GetWidth() - 28, "Modifiers")
+local modifiersLine = settings:CreateTexture(nil, "ARTWORK")
+modifiersLine:SetPoint("TOPLEFT", modifiersTitle, "BOTTOMLEFT", 0, -6); modifiersLine:SetSize(settings:GetWidth() - 28, 1)
+modifiersLine:SetColorTexture(0.22, 0.22, 0.23, 1)
+local EMULATION = { "none", "CTRL", "SHIFT", "ALT" }
+local IGNORED_KEYS = { LSHIFT = true, RSHIFT = true, LCTRL = true, RCTRL = true, LALT = true, RALT = true }
+local modifierRows, capturing = {}, nil
+local function ModifierEntry(trigger)
+	if type(ns.DB.modifiers) ~= "table" then ns.DB.modifiers = ns.CopyMenu(ns.DefaultModifiers) end
+	if type(ns.DB.modifiers[trigger]) ~= "table" then ns.DB.modifiers[trigger] = ns.CopyMenu(ns.DefaultModifiers[trigger]) end
+	return ns.DB.modifiers[trigger]
+end
+local function ModifierChanged() ns.ModifiersChanged(); Refresh(true) end
+local function Capture(trigger, key)
+	if capturing ~= trigger or IGNORED_KEYS[key] then return end
+	capturing = nil
+	if key ~= "ESCAPE" then ModifierEntry(trigger).key = key; ns.ModifiersChanged() end
+	Refresh(true)
+end
+for index, trigger in ipairs({ "LT", "RT" }) do
+	local y = -192 - (index - 1) * 36
+	Text(settings, "GameFontHighlight", 14, y - 5, 30, trigger)
+	local row = {}
+	row.key = Button(settings, "", 48, y, 150, function()
+		capturing = trigger; row.key:EnableKeyboard(true); row.key:EnableGamePadButton(true); Refresh(true)
+	end)
+	row.key.modifier, row.key.trigger = "key", trigger
+	row.key:SetScript("OnKeyDown", function(_, key) Capture(trigger, key) end)
+	row.key:SetScript("OnGamePadButtonDown", function(_, key) Capture(trigger, key) end)
+	row.emulate = Button(settings, "", 206, y, 156, function()
+		local entry = ModifierEntry(trigger)
+		local current = 1
+		for i, name in ipairs(EMULATION) do if name == (entry.emulate or "none") then current = i end end
+		local nextName = EMULATION[current % #EMULATION + 1]
+		entry.emulate = nextName ~= "none" and nextName or nil
+		ModifierChanged()
+	end)
+	row.emulate.modifier, row.emulate.trigger = "emulate", trigger
+	modifierRows[trigger] = row
+end
+local modifiersHelp = Text(settings, "GameFontHighlightSmall", 14, -270, settings:GetWidth() - 28,
+	"Pick a button, then press the pad button to use as the trigger. Choose the modifier your controller add-on turns that trigger into, if any. Changes apply when quick chat is closed.")
+modifiersHelp:SetWordWrap(true); modifiersHelp:SetTextColor(0.7, 0.68, 0.63)
+Button(settings, "Reset modifiers", 14, -318, 130, function()
+	capturing = nil
+	ns.DB.modifiers = ns.CopyMenu(ns.DefaultModifiers); ModifierChanged()
+end)
 Button(settings, "Done", settings:GetWidth() - 90, -settings:GetHeight() + 42, 76, function() settings:Hide() end)
 
 -- Destination picker includes empty slots and swaps, without overwriting data.
@@ -558,6 +608,11 @@ end
 Refresh = function(textOnly)
 	compact.label:SetText(ns.DB.compact and "Compact: On" or "Compact: Off")
 	lfgToggle.label:SetText(ns.DB.enhanceLFG and "On" or "Off")
+	for trigger, row in pairs(modifierRows) do
+		local entry = ModifierEntry(trigger)
+		row.key.label:SetText(capturing == trigger and "Press a button..." or entry.key or "")
+		row.emulate.label:SetText("Emulated: " .. (entry.emulate or "none"))
+	end
 	while #selected > 1 and not IsGroup(At(selected:sub(1, -2))) do selected = selected:sub(1, -2) end
 	local node, owned = At(selected)
 	local message, group = node and ns.IsMessage(node), IsGroup(node)
