@@ -9,6 +9,8 @@ function IsInInstance() return instanceType ~= "none", instanceType end
 function GetInstanceInfo() return "Arathi Basin", instanceType, 0, "", 0, 0, false, instanceID end
 function GetSubZoneText() subzoneReads = subzoneReads + 1; return subzone end
 LE_PARTY_CATEGORY_HOME, LE_PARTY_CATEGORY_INSTANCE = 1, 2
+local guilded = false
+function IsInGuild() return guilded end
 function IsInGroup(category)
 	if category == LE_PARTY_CATEGORY_HOME then return homeGroup ~= "SOLO" end
 	if category == LE_PARTY_CATEGORY_INSTANCE then return instanceGroup ~= "SOLO" end
@@ -258,7 +260,8 @@ assert(PADChatOpen:GetAttribute("menucontext") == "DEFAULT")
 assert(PADChatOpen.bindings.PADLSHOULDER == "LB" and PADChatOpen.bindings.PADRSHOULDER == "RB")
 assert(PADChatOpen.bindings["CTRL-PAD1"] == "A" and PADChatOpen.bindings["ALT-CTRL-SHIFT-PADRSHOULDER"] == "RB")
 Pad("X"); Pad("A"); Pad("RB")
-assert(PADChatOpen:GetAttribute("menucontext") == "GROUP" and PADChatOpen:GetAttribute("path") == "")
+assert(PADChatOpen:GetAttribute("menucontext") == "GUILD" and PADChatOpen:GetAttribute("path") == "")
+Pad("RB"); assert(PADChatOpen:GetAttribute("menucontext") == "GROUP")
 Pad("RB"); assert(PADChatOpen:GetAttribute("menucontext") == "RAID")
 Pad("RB"); assert(PADChatOpen:GetAttribute("menucontext") == "WHISPER")
 assert(PADChatOpen.bindings.PADDUP == "UP" and PADChatOpen.bindings["SHIFT-PADDDOWN"] == "DOWN")
@@ -267,9 +270,10 @@ assert(PADChatOpen.bindings.PADDUP == nil and PADChatOpen.bindings["SHIFT-PADDDO
 Pad("LB"); assert(PADChatOpen:GetAttribute("menucontext") == "WHISPER")
 Pad("LB"); assert(PADChatOpen:GetAttribute("menucontext") == "RAID")
 Pad("LB"); assert(PADChatOpen:GetAttribute("menucontext") == "GROUP")
+Pad("LB"); assert(PADChatOpen:GetAttribute("menucontext") == "GUILD")
 Pad("LB"); assert(PADChatOpen:GetAttribute("menucontext") == "DEFAULT")
 PADChatOpen:SetAttribute("battlegrounds", false) -- beta: the BG tab is skipped
-Pad("RB"); Pad("RB"); assert(PADChatOpen:GetAttribute("menucontext") == "WHISPER")
+Pad("RB"); Pad("RB"); Pad("RB"); assert(PADChatOpen:GetAttribute("menucontext") == "WHISPER")
 Pad("LB"); assert(PADChatOpen:GetAttribute("menucontext") == "GROUP")
 PADChatOpen:SetAttribute("battlegrounds", true)
 Pad("B"); Released()
@@ -448,7 +452,7 @@ for _, scenario in ipairs({
 	combat = false
 end
 Group("PARTY"); combat = true
-Pad("LeftButton"); Pad("LB"); Pad("A"); Pad("A")
+Pad("LeftButton"); Pad("LB"); Pad("LB"); Pad("A"); Pad("A")
 assert(sent[2] == "SAY"); Released()
 Group(); Pad("LeftButton"); Pad("RB")
 local beforeUnavailable = sent
@@ -533,6 +537,22 @@ Group()
 
 -- A branch override inherits until customized, keeps defaults intact, and
 -- updates the actual secure menu as membership changes, even during combat.
+-- Guild chat needs a guild, inherits Say, and never takes Group variants.
+previous = sent
+ns.SendNode({ text = "Hello guild" }, "GUILD"); assert(sent == previous, "No guild, no send")
+assert(ns.GetChannel("GUILD") == nil and not ns.ChannelAvailable("GUILD"))
+guilded = true
+assert(ns.GetChannel("GUILD") == "GUILD" and ns.ChannelAvailable("GUILD"))
+ns.SendNode({ text = "Hello guild" }, "GUILD"); assert(sent[1] == "Hello guild" and sent[2] == "GUILD")
+do
+	local node = { label = "X", A = { text = "say" }, variants = { GROUP = { label = "G", A = { text = "group" } } } }
+	assert(ns.PickNode(node, "GUILD") == node, "Group variants never reach Guild")
+	node.variants.GUILD = { label = "Guild", A = { text = "guild" } }
+	assert(ns.PickNode(node, "GUILD") == node.variants.GUILD and ns.PickNode(node, "GROUP") == node.variants.GROUP)
+end
+assert(ns.ResolveNode(ns.GetMenu(), "GUILD").X.A.A.text == ns.ResolveNode(ns.GetMenu(), "DEFAULT").X.A.A.text)
+guilded = false
+
 Select("X"); Click(Button("Group"))
 assert(Button("Remove").enabled == false and Button("Customize option").enabled)
 local defaultSocial = ns.CopyMenu(ns.DB.menu.X)
@@ -546,7 +566,7 @@ Pad("LeftButton"); Pad("X"); Pad("A")
 assert(LeafLabels(PADChatMenu)[1] == "XAA - Thanks for the group")
 Pad("A")
 assert(sent[1] == "Thanks for the group!" and sent[2] == "PARTY")
-Pad("LeftButton"); Pad("LB"); Pad("X"); Pad("A")
+Pad("LeftButton"); Pad("LB"); Pad("LB"); Pad("X"); Pad("A")
 assert(LeafLabels(PADChatMenu)[1] == "XAA - Hello", "Switching to Say must restore its own mapping")
 Pad("A"); assert(sent[1] == "Hello" and sent[2] == "SAY")
 Group("RAID"); Pad("LeftButton"); Pad("X"); Pad("A"); Pad("A")
@@ -784,15 +804,15 @@ assert(ns.ResolveNode(ns.GetMenu(), "DEFAULT").X.A.Y.emote == "WAVE")
 assert(ns.ResolveNode(ns.GetMenu(), "WHISPER").X.A.Y.text == "Thanks for the group!")
 assert(ns.ResolveNode(ns.GetMenu(), "WHISPER").X.A.A.text == "Hello", "Whisper inherits Say, not Group")
 members = { { "Erin", true } }; Group("PARTY"); combat = true
-Pad("LeftButton"); Pad("LB"); Pad("LB"); Pad("X"); Pad("A")
+Pad("LeftButton"); Pad("LB"); Pad("LB"); Pad("LB"); Pad("X"); Pad("A")
 assert(table.concat(LeafLabels(PADChatMenu), ",") == "XAA - Hello,XAX - Goodbye,XAY - Thanks for the group,XA(LT+X) - Have a good one,XA(RT+X) - Gotta go")
 local emotesBefore = #emotes
 Pad("Y"); assert(sent[1] == "Thanks for the group!" and sent[2] == "WHISPER" and sent[3] == "Erin" and #emotes == emotesBefore)
 Released()
-Pad("LeftButton"); Pad("LB"); Pad("LB"); Pad("X"); Pad("A"); Pad("X")
+Pad("LeftButton"); Pad("LB"); Pad("LB"); Pad("LB"); Pad("X"); Pad("A"); Pad("X")
 assert(sent[1] == "Farewell" and sent[2] == "WHISPER" and #emotes == emotesBefore, "Whisper Goodbye doesn't wave")
 Released()
-Pad("LeftButton"); Pad("LB"); Pad("X"); Pad("A"); Pad("X")
+Pad("LeftButton"); Pad("LB"); Pad("LB"); Pad("X"); Pad("A"); Pad("X")
 assert(sent[1] == "Farewell" and sent[2] == "SAY" and emotes[#emotes] == "WAVE", "Say Goodbye still waves")
 Released(); combat = false; Group()
 Click(Button("Whisper")); Select("XAY")

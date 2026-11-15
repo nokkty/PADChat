@@ -13,7 +13,7 @@ I've played World of Warcraft with a controller for many years, and communicatin
 - **Button combos:** Navigate chat menus up to 4 presses deep using the face buttons (**A / X / Y** or **Cross / Square / Triangle**).
 - **Trigger modifiers:** Hold **LT**, **RT** or both with a face button for 12 slots per level. Each combination can hold its own category or message and counts as one press. A held trigger applies at every level until you release it.
 - **Preset trigger messages:** Common replies such as "I cannot right now." and "On my way!" are ready to use on **LT** and **RT**. **LT + RT** is left free for your own messages.
-- **Context tabs:** Tap **LB / RB** (bumpers) to switch between **Whisper**, **Say**, **Group**, and **Battleground** channels. Say is always the tab you start on.
+- **Context tabs:** Tap **LB / RB** (bumpers) to switch between **Whisper**, **Say**, **Guild**, **Group**, and **Battleground** channels. The Guild tab sends your Say messages to guild chat and is greyed out while you are not in a guild. Say is always the tab you start on.
 - **Whispers:** The Whisper tab sends your Say messages privately. A list of the people you've recently whispered or been whispered by (most recent first), followed by your online group members, appears beside the overlay; pick one with **D-pad Up / Down**.
 - **Looking For Group integration:** Select a group or player in the Looking For Group window and press **Y** to whisper them with quick chat. It opens on a special **LFG** tab with role replies (`{LEVEL} {CLASS} DPS`, `HEALS` or `TANK`, for example "60 Mage HEALS"); LB / RB still reach the other tabs. A **Y** prompt appears beside **Send Message**. In the window's **Who** tab, move the cursor onto a player and press **Y**; the row shows the **Y** prompt. Turn both off under **Settings → Integrations → Enhance LFG Window**.
 - **Built-in editor:** Customize messages, categories, emotes, and `{location}`, `{LEVEL}` and `{CLASS}` placeholders from the minimap button. All 12 slots are listed at each level, and only your changes are saved, so everything else follows the addon's defaults.
@@ -54,7 +54,7 @@ I've played World of Warcraft with a controller for many years, and communicatin
 | **A / X / Y** *(Cross / Square / Triangle)* | Select a category or message |
 | Hold **LT**, **RT** or both *(L2 / R2)* with **A / X / Y** | Select that combination's own category or message |
 | **B** *(Circle)* | Cancel / close the menu |
-| **LB / RB** *(left / right bumper)* | Switch tabs (Whisper / Say / Group / BG) |
+| **LB / RB** *(left / right bumper)* | Switch tabs (Whisper / Say / Guild / Group / BG) |
 | **D-pad Up / Down** *(Whisper and LFG tabs only)* | Choose who to whisper |
 | **Y** *(Looking For Group window, listing selected)* | Whisper that listing's leader from the LFG tab |
 | **Y** *(Looking For Group Who tab, on a player)* | Whisper that player |
@@ -73,6 +73,10 @@ I've played World of Warcraft with a controller for many years, and communicatin
 | `tests/` | Tests |
 
 ## Changelog
+
+### Unreleased
+
+- New **Guild** tab between Say and Group: sends your Say messages to guild chat. Without a guild the tab is greyed out and shows "Join a guild to send this message."
 
 ### 0.4.0
 

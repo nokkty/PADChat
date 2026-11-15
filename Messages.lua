@@ -8,9 +8,10 @@
 -- category that opens the next level, up to four presses deep, so "X then Y
 -- then A" works the same as Tribes 2's "V G Y".
 --
--- The selected Whisper, Say, Group or Battleground tab determines where messages
--- go. `variants.WHISPER`, `variants.GROUP` and `variants.RAID` replace options on
--- those tabs; Whisper inherits Say, Battleground inherits Group, and false
+-- The selected Whisper, Say, Guild, Group or Battleground tab determines where
+-- messages go. `variants.WHISPER`, `variants.GUILD`, `variants.GROUP` and
+-- `variants.RAID` replace options on those tabs; Whisper and Guild inherit Say
+-- (Group variants never reach Guild), Battleground inherits Group, and false
 -- clears a slot.
 -- A message sends chat text, an `emote` token, or both: "Wave" is emote-only
 -- and says nothing. Chat text can hold {location}, {LEVEL} and {CLASS}
